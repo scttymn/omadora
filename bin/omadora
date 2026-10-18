@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Start, show, or hide the Chrome window that actually plays Pandora.
+# The bar widget is the player. This window is the engine.
+
+set -euo pipefail
+
+url="https://www.pandora.com/"
+profile="${XDG_DATA_HOME:-$HOME/.local/share}/omadora/chrome"
+mkdir -p "$profile"
+
+window_address() {
+  hyprctl clients -j | jq -r '
+    .[] | select((.class // "") | test("omadora"; "i")) | .address
+  ' | head -n1
+}
+
+launch() {
+  local existing
+  existing="$(window_address || true)"
+  if [[ -n $existing ]]; then
+    hyprctl dispatch focuswindow "address:$existing" >/dev/null
+    return
+  fi
+  exec omarchy-launch-webapp "$url" \
+    --class=omadora \
+    --user-data-dir="$profile" \
+    --no-first-run \
+    --disable-session-crashed-bubble
+}
+
+show() {
+  launch
+}
+
+hide() {
+  local existing
+  existing="$(window_address || true)"
+  if [[ -z $existing ]]; then
+    return
+  fi
+  hyprctl dispatch movetoworkspacesilent "special:omadora,address:$existing" >/dev/null
+}
+
+case "${1:-launch}" in
+  launch) launch ;;
+  show) show ;;
+  hide) hide ;;
+  *)
+    echo "usage: omadora launch|show|hide" >&2
+    exit 2
+    ;;
+esac

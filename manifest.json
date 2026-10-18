@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "scttymn.omadora",
+  "name": "Omadora",
+  "version": "0.1.0",
+  "author": "scttymn",
+  "license": "MIT",
+  "description": "Pandora in the Omarchy bar. The site stays in a Chrome window; this widget is the player.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omadora",
+    "description": "Play, pause, and skip Pandora from the bar. Click to start the hidden player.",
+    "category": "Media",
+    "aliases": [
+      "omadora",
+      "pandora"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
