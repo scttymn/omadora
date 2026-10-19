@@ -159,6 +159,15 @@ Item {
     }
   }
 
+  // A safety net: with no engine for a while (an update that reloaded the
+  // widget mid-change, say), connect again or start one.
+  Timer {
+    interval: 10000
+    repeat: true
+    running: !root.online
+    onTriggered: retryTimer.restart()
+  }
+
   // After a failed download, wait before trying again.
   Timer {
     id: fetchRetry
