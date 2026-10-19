@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 
 // The expanded player: stations, the track, and what plays next.
@@ -18,6 +19,8 @@ Item {
   property point moreAt: Qt.point(0, 0)
   property bool accountOpen: false
   property point accountAt: Qt.point(0, 0)
+  // The window is on screen (set by the bar widget).
+  property bool shown: true
 
   // Two places to be: Music (stations, the player, up next) and Discover
   // (the magazine). Pages from either open under Music.
@@ -190,6 +193,104 @@ Item {
     return matches
   }
   readonly property var queue: queuePage === "history" ? player.history : player.upcoming
+
+  // ---- the AI tab: music like the song playing, from an AI agent. It asks
+  // only while the tab is on screen, a moment after the song changes (so
+  // skipping through songs doesn't ask for each), and keeps each answer.
+
+  property var ai: ({})
+  property var aiErrors: ({})
+  property string aiAsking: ""
+  property var agentInfo: null
+  property bool choosingAgent: false
+  readonly property string aiTrack: root.player.trackId
+  readonly property var aiNow: ai[aiTrack] || null
+  readonly property bool aiOnScreen: shown && section === "music" && showQueue && queuePage === "ai"
+  readonly property bool hasAgent: agentInfo !== null && !!agentInfo.agent
+  readonly property string agentName: agentInfo && agentInfo.name ? agentInfo.name : "the agent"
+
+  onAiOnScreenChanged: {
+    if (aiOnScreen) {
+      loadAgents()
+      aiWait.restart()
+    }
+  }
+  onAiTrackChanged: if (aiOnScreen) aiWait.restart()
+
+  Timer {
+    id: aiWait
+    interval: 2500
+    onTriggered: root.askAi(false)
+  }
+
+  // An agent chosen elsewhere (Omarchy's menu, settings.toml) shows up here.
+  Timer {
+    interval: 5000
+    repeat: true
+    running: root.aiOnScreen && !root.hasAgent
+    onTriggered: root.loadAgents()
+  }
+
+  function loadAgents() {
+    root.engine.request("agents", {}, function (ok, result) {
+      if (!ok)
+        return
+      var had = root.hasAgent
+      root.agentInfo = result
+      if (!had && root.hasAgent)
+        aiWait.restart()
+    })
+  }
+
+  function askAi(fresh) {
+    var id = aiTrack
+    if (!aiOnScreen || id === "" || !root.engine.signedIn || !hasAgent)
+      return
+    if (!fresh && ai[id])
+      return
+    if (aiAsking === id)
+      return
+    aiAsking = id
+    var errors = Object.assign({}, aiErrors)
+    delete errors[id]
+    aiErrors = errors
+    root.engine.request("recommend", { fresh: fresh === true }, function (ok, result) {
+      if (root.aiAsking === id)
+        root.aiAsking = ""
+      if (ok) {
+        var answers = Object.assign({}, root.ai)
+        answers[result["for"].id] = result
+        root.ai = answers
+      } else {
+        var failed = Object.assign({}, root.aiErrors)
+        failed[id] = String(result)
+        root.aiErrors = failed
+      }
+    })
+  }
+
+  function chooseAgent(id) {
+    root.engine.request("setAgent", { agent: id }, function (ok, result) {
+      if (!ok)
+        return
+      root.agentInfo = result
+      root.choosingAgent = false
+      root.ai = ({})
+      root.aiErrors = ({})
+      aiWait.restart()
+    })
+  }
+
+  // A suggestion: play the song (or a station from it, when the plan can't
+  // play it on demand), or open the artist.
+  function pickSuggestion(item) {
+    if (item.kind === "artist")
+      showArtist(item.id, item.name)
+    else if (item.playable)
+      root.player.playOnDemand(item.albumId || item.id, item.id)
+    else
+      root.player.createStation(item.id)
+  }
 
   component Label: Text {
     textFormat: Text.PlainText
@@ -706,13 +807,14 @@ Item {
         Repeater {
           model: [
             { key: "next", label: "Up next" },
-            { key: "history", label: "History" }
+            { key: "history", label: "History" },
+            { key: "ai", label: "AI" }
           ]
 
           delegate: Rectangle {
             required property var modelData
             readonly property bool selected: root.queuePage === modelData.key
-            width: queueTabs.width / 2
+            width: queueTabs.width / 3
             height: Style.space(34)
             radius: Style.cornerRadius
             color: selected ? root.theme.surface : "transparent"
@@ -745,7 +847,7 @@ Item {
         anchors.rightMargin: Style.space(17)
         clip: true
         spacing: Style.space(20)
-        visible: count > 0
+        visible: count > 0 && root.queuePage !== "ai"
         model: root.queue
         boundsBehavior: Flickable.StopAtBounds
 
@@ -801,7 +903,7 @@ Item {
       }
 
       Label {
-        visible: queueList.count === 0
+        visible: queueList.count === 0 && root.queuePage !== "ai"
         anchors.top: queueTabs.bottom
         anchors.topMargin: Style.space(20)
         anchors.left: parent.left
@@ -818,6 +920,254 @@ Item {
         }
         color: root.theme.muted
         font.pixelSize: Style.font.bodySmall
+      }
+
+      Item {
+        id: aiPanel
+        visible: root.queuePage === "ai"
+        anchors.top: queueTabs.bottom
+        anchors.topMargin: Style.space(20)
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.leftMargin: Style.space(21)
+        anchors.rightMargin: Style.space(17)
+
+        readonly property string mode: {
+          if (!root.engine.signedIn)
+            return "signedOut"
+          if (root.agentInfo === null)
+            return "loading"
+          if (!root.hasAgent || root.choosingAgent)
+            return "choose"
+          if (root.aiTrack === "")
+            return "idle"
+          if (root.aiNow)
+            return "picks"
+          if (root.aiErrors[root.aiTrack])
+            return "error"
+          return "asking"
+        }
+
+        // Which agent answers, and a way to ask again or pick another.
+        Row {
+          id: aiHeader
+          visible: aiPanel.mode === "picks" || aiPanel.mode === "error" || aiPanel.mode === "asking" || aiPanel.mode === "idle"
+          width: parent.width
+          spacing: Style.space(8)
+
+          Caption {
+            text: "From " + root.agentName
+            font.pixelSize: Style.font.caption
+          }
+          Caption {
+            text: "·"
+            font.pixelSize: Style.font.caption
+          }
+          LinkLabel {
+            text: "change"
+            font.pixelSize: Style.font.caption
+            onClicked: root.choosingAgent = true
+          }
+          Caption {
+            visible: aiPanel.mode === "picks"
+            text: "·"
+            font.pixelSize: Style.font.caption
+          }
+          LinkLabel {
+            visible: aiPanel.mode === "picks"
+            text: "ask again"
+            font.pixelSize: Style.font.caption
+            onClicked: root.askAi(true)
+          }
+        }
+
+        // Status: signed out, thinking, nothing playing, or what went wrong.
+        Column {
+          visible: aiPanel.mode !== "picks" && aiPanel.mode !== "choose"
+          anchors.top: aiHeader.visible ? aiHeader.bottom : parent.top
+          anchors.topMargin: aiHeader.visible ? Style.space(16) : 0
+          width: parent.width
+          spacing: Style.space(10)
+
+          Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: root.theme.muted
+            font.pixelSize: Style.font.bodySmall
+            text: {
+              switch (aiPanel.mode) {
+              case "signedOut": return "Sign in, and an AI agent will suggest music like what's playing."
+              case "loading": return ""
+              case "idle": return "Play something, and " + root.agentName + " will suggest music like it."
+              case "error": return root.aiErrors[root.aiTrack] || ""
+              default: return "Asking " + root.agentName + " for music like “" + root.player.title + "”…"
+              }
+            }
+          }
+
+          LinkLabel {
+            visible: aiPanel.mode === "error"
+            text: "Try again"
+            font.pixelSize: Style.font.bodySmall
+            onClicked: root.askAi(true)
+          }
+        }
+
+        // No agent yet, or picking another: the supported ones installed here.
+        Column {
+          visible: aiPanel.mode === "choose"
+          width: parent.width
+          spacing: Style.space(12)
+
+          Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: root.theme.fg
+            font.pixelSize: Style.font.bodySmall
+            text: root.hasAgent
+              ? "Choose the AI agent that suggests music."
+              : "Choose an AI agent to suggest music like what's playing. It asks only while this tab is open."
+          }
+
+          Flow {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Repeater {
+              model: root.agentInfo ? root.agentInfo.installed : []
+
+              delegate: Rectangle {
+                required property var modelData
+                readonly property bool current: root.agentInfo && root.agentInfo.agent === modelData.id
+                width: agentLabel.implicitWidth + Style.space(20)
+                height: Style.space(30)
+                radius: Style.cornerRadius
+                color: current ? root.theme.accent : (agentMouse.containsMouse ? root.theme.raised : root.theme.surface)
+
+                Label {
+                  id: agentLabel
+                  anchors.centerIn: parent
+                  text: modelData.name
+                  color: parent.current ? root.theme.accentText : root.theme.fg
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                MouseArea {
+                  id: agentMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.chooseAgent(modelData.id)
+                }
+              }
+            }
+          }
+
+          Label {
+            visible: root.agentInfo !== null && root.agentInfo.installed.length === 0
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: root.theme.muted
+            font.pixelSize: Style.font.bodySmall
+            text: "None of the agents Omadora can ask is installed."
+          }
+
+          LinkLabel {
+            text: "Set Omarchy's default agent"
+            font.pixelSize: Style.font.bodySmall
+            onClicked: Quickshell.execDetached(["omarchy-menu", "summon", "setup.default.agent"])
+          }
+
+          LinkLabel {
+            visible: root.hasAgent
+            text: "Cancel"
+            font.pixelSize: Style.font.bodySmall
+            onClicked: root.choosingAgent = false
+          }
+        }
+
+        ListView {
+          id: aiList
+          visible: aiPanel.mode === "picks"
+          anchors.top: aiHeader.bottom
+          anchors.topMargin: Style.space(16)
+          anchors.bottom: parent.bottom
+          width: parent.width
+          clip: true
+          spacing: Style.space(18)
+          boundsBehavior: Flickable.StopAtBounds
+          model: root.aiNow ? root.aiNow.picks : []
+
+          footer: Item {
+            width: aiList.width
+            height: root.aiNow && root.aiNow.picks.length === 0 ? Style.space(40) : 0
+
+            Label {
+              visible: parent.height > 0
+              width: parent.width
+              wrapMode: Text.WordWrap
+              color: root.theme.muted
+              font.pixelSize: Style.font.bodySmall
+              text: "None of " + root.agentName + "'s suggestions are in the catalog."
+            }
+          }
+
+          delegate: Item {
+            required property var modelData
+            required property int index
+            readonly property var item: modelData.item
+            width: aiList.width
+            height: Math.max(Style.space(40), pickText.implicitHeight)
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.pickSuggestion(parent.item)
+            }
+
+            ArtMark {
+              id: pickArt
+              width: Style.space(40)
+              height: width
+              rings: false
+              art: parent.item.color || root.theme.swatch(index + 5)
+              artUrl: parent.item.art || ""
+            }
+
+            Column {
+              id: pickText
+              anchors.left: pickArt.right
+              anchors.leftMargin: Style.space(12)
+              anchors.right: parent.right
+              spacing: Style.space(3)
+
+              Label {
+                width: parent.width
+                text: parent.parent.item.name || parent.parent.item.title || ""
+                color: root.theme.strong
+                font.pixelSize: Style.font.body
+              }
+
+              Label {
+                width: parent.width
+                text: parent.parent.item.kind === "artist" ? "Artist" : (parent.parent.item.artist || "")
+                color: root.theme.muted
+                font.pixelSize: Style.font.caption
+              }
+
+              Label {
+                width: parent.width
+                visible: text !== ""
+                text: parent.parent.modelData.why || ""
+                color: root.theme.faint
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+                maximumLineCount: 3
+              }
+            }
+          }
+        }
       }
     }
 

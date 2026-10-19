@@ -55,6 +55,21 @@ match = "title"
 
 `match` says how to tell what an article is about: `pitchfork` (Pitchfork's review titles and links), `title` (titles like "Artist – Album" or "Artist, “Album”"), `tags` (the article's categories name artists; section tags like "Music News" are skipped, and artists in the headline come first), `headline` (the headline starts with the artist's name, as in "Orbital Revisits…"; a column's name before a colon is skipped, and the article must mention the artist too), or `none` (show it, match nothing). A tag can name someone outside music who shares a name with an artist; that article then links to the artist. When the file has feeds, they replace the defaults, so list Pitchfork's too if you want to keep them. Most magazines publish standard RSS (many from WordPress), so a new one usually needs only the right `match`; one with its own style needs a small matcher in `engine/src/discover.rs`.
 
+## AI
+
+The AI tab, next to Up next and History, suggests songs and artists like the one playing. It asks an AI agent only while the tab is on screen, a few seconds after the song changes (so skipping through songs doesn't ask about each one), and keeps each song's answer. Every suggestion is checked against the catalog, preferring original recordings over remixes, so everything listed plays: click a song to play it (or start a station from it, when your plan can't play songs on demand), or an artist to open their page. What's playing and your recent songs and thumbs up go to the agent's provider.
+
+The agent is the one set in `~/.config/omadora/settings.toml`, else Omarchy's default agent (`omarchy default agent`). With neither, the tab offers the supported agents installed on this machine: Claude Code, Codex, Gemini, OpenCode, GitHub Copilot, Crush, Grok, Pi, and Oh My Pi. Each runs headless, with no tools.
+
+```toml
+[ai]
+agent = "claude"
+# What to suggest; Omadora adds what's playing and the answer's format.
+prompt = "Suggest 8 deep cuts from the same scene and decade, no hits."
+# Or any command instead of an agent: the prompt on stdin, the answer on stdout.
+# command = "my-llm --json"
+```
+
 ## Install
 
 ```bash

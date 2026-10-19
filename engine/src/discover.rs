@@ -291,7 +291,7 @@ fn parse_feed(feed: &Feed, bytes: &[u8]) -> anyhow::Result<Vec<Article>> {
 // ---- telling what an article is about
 
 #[derive(Clone, Debug, PartialEq)]
-enum Lead {
+pub(crate) enum Lead {
     Album { title: String, artist: String },
     Track { title: String, artist: String },
     Artist { name: String },
@@ -346,16 +346,32 @@ fn clean_title(title: &str) -> String {
 /// Does Pandora's album or song name match the one wanted? Pandora adds
 /// credits and editions the magazine leaves off: "Lies (feat. Lana Del Rey)",
 /// "Dopamine Chamber (Deluxe)".
-fn title_agrees(pandora_name: &str, wanted: &str) -> bool {
+/// The bracketed extras Pandora's name adds to the wanted title, outermost
+/// last: `Some([])` for the same title, `None` when they differ.
+fn extras(pandora_name: &str, wanted: &str) -> Option<Vec<String>> {
     let mut name = pandora_name.trim();
+    let mut added = Vec::new();
     loop {
         if same(name, wanted) {
-            return true;
+            return Some(added);
         }
-        let Some(open) = name.rfind([' ', '(', '[']).filter(|_| name.ends_with([')', ']'])) else { return false };
-        let Some(start) = name[..=open].rfind(['(', '[']) else { return false };
+        name.ends_with([')', ']']).then_some(())?;
+        let start = name.rfind(['(', '['])?;
+        added.push(name[start..].to_string());
         name = name[..start].trim_end();
     }
+}
+
+/// Extras that leave the recording itself alone: a remaster, a featured
+/// artist, an edition. "(Moby Remix)" or "(Blue Silver)" is another take.
+fn harmless(extra: &str) -> bool {
+    const WORDS: [&str; 14] = [
+        "remaster", "remastered", "deluxe", "edition", "expanded", "anniversary", "version", "single", "album",
+        "original", "mono", "stereo", "bonus", "track",
+    ];
+    let w = words(extra);
+    matches!(w.first().map(String::as_str), Some("feat" | "ft" | "featuring" | "with"))
+        || w.iter().all(|x| WORDS.contains(&x.as_str()) || x.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Pitchfork review links are the artist then the title:
@@ -479,24 +495,33 @@ fn headline_artist(text: &str, body: &str, found: &[Value]) -> Option<Value> {
     (!pun).then(|| artist.clone())
 }
 
-fn resolve(pandora: &Pandora, lead: &Lead) -> Option<Value> {
+/// The search result for a title and artist: the exact title if there is
+/// one, else one whose extras leave the recording alone ("(feat. …)",
+/// "(2001 Remaster)"), and a remix only when nothing else matches.
+fn best<'a>(found: &'a [Value], field: &str, title: &str, artist: &str) -> Option<&'a Value> {
+    let by = |x: &&Value| artist_agrees(x["artist"].as_str().unwrap_or_default(), artist);
+    let name = |x: &Value| x[field].as_str().unwrap_or_default().to_string();
+    // Exact, then only harmless extras, then any extras.
+    let rank = |x: &&Value| match extras(&name(x), title)? {
+        e if e.is_empty() => Some(0),
+        e if e.iter().all(|x| harmless(x)) => Some(1),
+        _ => Some(2),
+    };
+    found.iter().filter(by).filter_map(|x| rank(&x).map(|r| (r, x))).min_by_key(|(r, _)| *r).map(|(_, x)| x)
+}
+
+pub(crate) fn resolve(pandora: &Pandora, lead: &Lead) -> Option<Value> {
     match lead {
         Lead::Album { title, artist } => {
             let found = catalog::search(pandora, &format!("{artist} {title}")).ok()?;
-            let album = found["albums"].as_array()?.iter().find(|x| {
-                title_agrees(x["name"].as_str().unwrap_or_default(), title)
-                    && artist_agrees(x["artist"].as_str().unwrap_or_default(), artist)
-            })?;
+            let album = best(found["albums"].as_array()?, "name", title, artist)?;
             let mut m = album.clone();
             m["kind"] = json!("album");
             Some(m)
         }
         Lead::Track { title, artist } => {
             let found = catalog::search(pandora, &format!("{artist} {title}")).ok()?;
-            let track = found["tracks"].as_array()?.iter().find(|x| {
-                title_agrees(x["title"].as_str().unwrap_or_default(), title)
-                    && artist_agrees(x["artist"].as_str().unwrap_or_default(), artist)
-            })?;
+            let track = best(found["tracks"].as_array()?, "title", title, artist)?;
             let mut m = track.clone();
             m["kind"] = json!("track");
             m["name"] = track["title"].clone();
@@ -828,11 +853,25 @@ mod tests {
     }
 
     #[test]
+    fn originals_beat_remixes() {
+        let found = vec![
+            json!({ "title": "Souvenir (Moby Remix)", "artist": "OMD" }),
+            json!({ "title": "Souvenir (Remastered 2019)", "artist": "OMD" }),
+        ];
+        assert_eq!(best(&found, "title", "Souvenir", "OMD").unwrap()["title"], "Souvenir (Remastered 2019)");
+        let only_remix = vec![json!({ "title": "Souvenir (Moby Remix)", "artist": "OMD" })];
+        assert_eq!(best(&only_remix, "title", "Souvenir", "OMD").unwrap()["title"], "Souvenir (Moby Remix)");
+        assert!(harmless("(feat. Lana Del Rey)"));
+        assert!(harmless("(2001 Remaster)"));
+        assert!(!harmless("(Blue Silver)"));
+    }
+
+    #[test]
     fn pandora_titles_may_add_credits_and_editions() {
-        assert!(title_agrees("Lies (feat. Lana Del Rey)", "Lies"));
-        assert!(title_agrees("Dopamine Chamber [Deluxe] (Remastered)", "Dopamine Chamber"));
-        assert!(title_agrees("Kinda Guy", "Kinda Guy"));
-        assert!(!title_agrees("Lies (feat. Lana Del Rey)", "Truth"));
+        assert!(extras("Lies (feat. Lana Del Rey)", "Lies").is_some());
+        assert!(extras("Dopamine Chamber [Deluxe] (Remastered)", "Dopamine Chamber").is_some());
+        assert_eq!(extras("Kinda Guy", "Kinda Guy"), Some(vec![]));
+        assert!(extras("Lies (feat. Lana Del Rey)", "Truth").is_none());
     }
 
     #[test]

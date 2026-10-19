@@ -140,6 +140,7 @@ BarWidget {
       player: player
       theme: theme
       fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+      shown: playerWindow.visible
       onShrinkRequested: root.shrink()
     }
   }

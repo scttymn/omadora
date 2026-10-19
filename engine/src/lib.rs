@@ -6,4 +6,5 @@ pub mod discover;
 pub mod engine;
 pub mod pandora;
 pub mod radio;
+pub mod recommend;
 pub mod server;

@@ -73,6 +73,9 @@ extrapolate.
 | `signOut` | | forgets the saved account and session, and stops |
 | `discover` | optional `refresh` | magazine articles, matched to Pandora |
 | `image` | `url` | a Discover article's picture as a cached local file |
+| `recommend` | optional `fresh` | songs and artists like the one playing, from the AI agent, checked against the catalog |
+| `agents` | | the AI agent in use, where it was chosen, and the supported ones installed |
+| `setAgent` | `agent` | saves Omadora's own AI agent in `settings.toml` |
 
 `previous` restarts the track after its first three seconds; on radio it
 only replays. Every item carries `playable`, which is false when the
