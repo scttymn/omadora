@@ -1,9 +1,11 @@
 import QtQuick
 import qs.Commons
 
-// Discover: music magazines' latest reviews as a magazine page. Each card's
-// chips are the album, song, or artist it is about on Pandora; the headline
-// opens the article itself in the browser.
+// Discover: music magazines' latest articles as a magazine page. Articles
+// with a picture are cards in a grid; text-only ones (Rolling Stone's news)
+// are a Headlines rail beside it. Chips are the album, song, or artist an
+// article is about on Pandora; the headline opens the article itself in the
+// browser.
 Item {
   id: root
 
@@ -26,6 +28,17 @@ Item {
     if (feed === "")
       return all
     return all.filter(function (i) { return i.feed === feed })
+  }
+  // Filters pick among the feeds with pictures; text-only stories are all
+  // in the Headlines rail, whatever the filter.
+  readonly property var withPictures: items.filter(function (i) { return i.image !== "" })
+  readonly property var headlines: (discover ? discover.items : []).filter(function (i) { return i.image === "" })
+  readonly property var pictureFeeds: {
+    if (!discover)
+      return []
+    return discover.feeds.filter(function (f) {
+      return discover.items.some(function (i) { return i.feed === f.name && i.image !== "" })
+    })
   }
   readonly property int pending: discover ? discover.pending : 0
 
@@ -192,7 +205,7 @@ Item {
       }
 
       Repeater {
-        model: root.discover ? root.discover.feeds : []
+        model: root.pictureFeeds
         delegate: FilterChip {
           required property var modelData
           label: root.source(modelData.name).section || modelData.name
@@ -240,18 +253,19 @@ Item {
 
   GridView {
     id: grid
+    visible: root.withPictures.length > 0
     anchors.top: bar.bottom
     anchors.bottom: strip.top
     anchors.left: parent.left
-    anchors.right: parent.right
+    anchors.right: rail.visible ? rail.left : parent.right
     anchors.leftMargin: Style.space(28) - gap / 2
     anchors.rightMargin: Style.space(28) - gap / 2
     clip: true
     boundsBehavior: Flickable.StopAtBounds
-    model: root.items
+    model: root.withPictures
 
     readonly property real gap: Style.space(24)
-    readonly property int columns: Math.max(1, Math.floor(width / Style.space(300)))
+    readonly property int columns: Math.max(1, Math.floor(width / Style.space(260)))
     readonly property real card: width / columns - gap
     cellWidth: width / columns
     cellHeight: card + Style.space(244)
@@ -358,21 +372,140 @@ Item {
         }
       }
     }
+  }
+
+  // ---- headlines: articles without a picture
+
+  Item {
+    id: rail
+    visible: root.headlines.length > 0
+    anchors.top: bar.bottom
+    anchors.bottom: strip.top
+    anchors.right: parent.right
+    anchors.rightMargin: Style.space(28)
+    // Beside the grid; the whole page when there is nothing with a picture.
+    readonly property bool alone: !grid.visible
+    width: alone ? parent.width - Style.space(56) : Math.max(Style.space(260), Math.min(Style.space(360), parent.width * 0.3))
+
+    Rectangle {
+      visible: !rail.alone
+      anchors.left: parent.left
+      anchors.leftMargin: -Style.space(14)
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      width: 1
+      color: root.theme.surface
+    }
 
     Label {
-      anchors.centerIn: parent
-      visible: grid.count === 0
-      text: {
-        if (root.loading || !root.discover)
-          return "Loading the latest reviews…"
-        if (root.discover.errors.length > 0)
-          return root.discover.errors.join("\n")
-        return "Nothing here yet."
-      }
-      color: root.theme.muted
-      font.pixelSize: Style.font.body
-      horizontalAlignment: Text.AlignHCenter
+      id: railHeading
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(4)
+      text: "Headlines"
+      color: root.theme.faint
+      font.pixelSize: Style.font.bodySmall
+      font.bold: true
+      font.capitalization: Font.AllUppercase
+      font.letterSpacing: 1.6
     }
+
+    ListView {
+      id: headlineList
+      anchors.top: railHeading.bottom
+      anchors.topMargin: Style.space(12)
+      anchors.bottom: parent.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.leftMargin: Style.space(4)
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      model: root.headlines
+
+      delegate: Column {
+        id: headline
+        required property var modelData
+        readonly property var where: root.source(modelData.feed)
+        readonly property var chipList: root.chips(modelData)
+        width: headlineList.width
+        spacing: Style.space(6)
+        bottomPadding: Style.space(16)
+
+        Label {
+          width: parent.width
+          text: [headline.where.magazine, headline.where.section, root.ago(headline.modelData.published)]
+            .filter(function (s) { return s }).join("  ·  ")
+          color: root.theme.accent
+          font.pixelSize: Style.font.caption
+          font.capitalization: Font.AllUppercase
+          font.letterSpacing: 1.1
+        }
+
+        Label {
+          width: parent.width
+          text: headline.modelData.title
+          color: headlineArea.containsMouse ? root.theme.accent : root.theme.strong
+          font.pixelSize: Style.font.body
+          font.bold: true
+          wrapMode: Text.WordWrap
+          maximumLineCount: rail.alone ? 2 : 3
+
+          MouseArea {
+            id: headlineArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: Qt.openUrlExternally(headline.modelData.link)
+          }
+        }
+
+        // With the whole page to itself, there is room for the summary.
+        Label {
+          visible: rail.alone && text !== ""
+          width: parent.width
+          text: headline.modelData.summary
+          color: root.theme.muted
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+          maximumLineCount: 2
+        }
+
+        Flow {
+          visible: headline.chipList.length > 0
+          width: parent.width
+          spacing: Style.space(6)
+
+          Repeater {
+            model: headline.chipList
+            delegate: MatchChip {
+              required property var modelData
+              info: modelData
+              onPicked: root.follow(modelData)
+            }
+          }
+        }
+
+        Rectangle {
+          width: parent.width
+          height: 1
+          color: root.theme.surface
+        }
+      }
+    }
+  }
+
+  Label {
+    anchors.centerIn: parent
+    visible: !grid.visible && !rail.visible
+    text: {
+      if (root.loading || !root.discover)
+        return "Loading the latest reviews…"
+      if (root.discover.errors.length > 0)
+        return root.discover.errors.join("\n")
+      return "Nothing here yet."
+    }
+    color: root.theme.muted
+    font.pixelSize: Style.font.body
+    horizontalAlignment: Text.AlignHCenter
   }
 
   // ---- what's playing, to control it while reading

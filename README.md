@@ -24,11 +24,13 @@ It also remembers where you were. After a restart or a reboot the player comes b
 
 ## Discover
 
-Discover, next to Music in the header, is a magazine of the latest reviews. Each card is an article from a music magazine's RSS feed, with chips for the album, song, or artist it is about on Pandora. A chip opens that page under Music; the headline opens the article itself in your browser. A strip along the bottom keeps what's playing in reach.
+Discover, next to Music in the header, is a magazine of the latest reviews and news from music magazines' RSS feeds. Articles with a picture are cards, filtered by feed; stories without one are listed in the Headlines column on the right, which stays put whatever the filter. Each has chips for the album, song, or artist it is about on Pandora. A chip opens that page under Music; the headline opens the article itself in your browser. A strip along the bottom keeps what's playing in reach.
 
-A chip appears only when Pandora's title and artist both agree with the article, so a review never links to the wrong record; articles about something Pandora doesn't have still show, without chips. Matches are looked up once and cached.
+A chip appears only when Pandora's title and artist both agree with the article, so a review never links to the wrong record; articles about something Pandora doesn't have still show, without chips. Matches are looked up once and cached; an article that found nothing is tried again the next time the engine starts, in case Pandora has added it.
 
-Discover starts with Pitchfork's reviews: Best New Albums, Best New Tracks, Album Reviews, and Track Reviews. Add or replace feeds in `~/.config/omadora/feeds.toml`:
+Discover starts with Pitchfork's reviews (Best New Albums, Best New Tracks, Album Reviews, and Track Reviews), Rolling Stone's music news, and Music Connection. Pitchfork's reviews link to the album or song; Rolling Stone's and Music Connection's stories, which have no pictures in their feeds, are headlines that link to the artists they cover.
+
+Feeds are fetched at most every half hour, and a magazine whose server supports it (Rolling Stone's and Music Connection's do) answers an unchanged feed with an empty "not modified" instead of the whole feed. Add or replace feeds in `~/.config/omadora/feeds.toml`:
 
 ```toml
 [[feed]]
@@ -42,7 +44,7 @@ url = "https://thequietus.com/feed/"
 match = "title"
 ```
 
-`match` says how to tell what an article is about: `pitchfork` (Pitchfork's review titles and links), `title` (titles like "Artist – Album" or "Artist, “Album”"), `tags` (the article's categories name artists), or `none` (show it, match nothing). When the file has feeds, they replace the defaults, so list Pitchfork's too if you want to keep them. A magazine with its own style needs a small parser in `engine/src/discover.rs`.
+`match` says how to tell what an article is about: `pitchfork` (Pitchfork's review titles and links), `title` (titles like "Artist – Album" or "Artist, “Album”"), `tags` (the article's categories name artists; section tags like "Music News" are skipped, and artists in the headline come first), `headline` (the headline starts with the artist's name, as in "Orbital Revisits…"; a column's name before a colon is skipped, and the article must mention the artist too), or `none` (show it, match nothing). A tag can name someone outside music who shares a name with an artist; that article then links to the artist. When the file has feeds, they replace the defaults, so list Pitchfork's too if you want to keep them. Most magazines publish standard RSS (many from WordPress), so a new one usually needs only the right `match`; one with its own style needs a small matcher in `engine/src/discover.rs`.
 
 ## Sign in
 
