@@ -66,12 +66,12 @@ mkdir -p "$dir"
 # One run at a time: a plugin reload can start several at once.
 exec 9>"$dir/.lock"
 flock 9
+# Holding the lock, any partial download is from a run that was cut off.
+rm -f "$dir"/.omadora-engine.*
 if have_engine && [[ $(cat "$mark" 2>/dev/null) == "$wanted" ]]; then
   use "$bin"
 fi
 
-# Holding the lock, any partial download is from a run that was cut off.
-rm -f "$dir"/.omadora-engine.*
 tmp=$(mktemp "$dir/.omadora-engine.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 trap 'exit 1' INT TERM HUP
