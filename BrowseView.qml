@@ -241,13 +241,24 @@ Item {
     property bool showArt: false
     property string detail: ""
     readonly property bool current: root.player.onDemand && root.player.trackId !== "" && root.player.trackId === trackRow.track.id
+    // The song a Discover chip pointed at.
+    readonly property bool focused: root.page.track !== undefined && root.page.track === trackRow.track.id
     signal picked()
 
     width: parent ? parent.width : 0
     height: Style.space(50)
     radius: Style.cornerRadius
-    color: current ? root.theme.raised : (trackArea.containsMouse ? Util.alpha(root.theme.raised, 0.6) : "transparent")
+    color: current ? root.theme.raised
+      : focused ? Util.alpha(root.theme.accent, 0.14)
+      : (trackArea.containsMouse ? Util.alpha(root.theme.raised, 0.6) : "transparent")
     opacity: track.playable === false ? 0.6 : 1
+
+    Rectangle {
+      visible: trackRow.focused
+      width: Style.space(3)
+      height: parent.height
+      color: root.theme.accent
+    }
 
     Label {
       id: leadLabel

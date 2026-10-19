@@ -22,6 +22,28 @@ The widget starts the engine on its own and restarts it if it dies; the engine k
 
 It also remembers where you were. After a restart or a reboot the player comes back paused on the same song at the same spot: the album or playlist with its Up next, or the station with the song that was on. Play picks up from there. Nothing plays or reaches Pandora until you press play, so a restart never takes your account from another device. On radio, the station's next songs are fetched once you do, and if the saved song is too old to play, the station starts fresh instead. Where you were lives in `~/.local/state/omadora/resume.json`.
 
+## Discover
+
+Discover, next to Music in the header, is a magazine of the latest reviews. Each card is an article from a music magazine's RSS feed, with chips for the album, song, or artist it is about on Pandora. A chip opens that page under Music; the headline opens the article itself in your browser. A strip along the bottom keeps what's playing in reach.
+
+A chip appears only when Pandora's title and artist both agree with the article, so a review never links to the wrong record; articles about something Pandora doesn't have still show, without chips. Matches are looked up once and cached.
+
+Discover starts with Pitchfork's reviews: Best New Albums, Best New Tracks, Album Reviews, and Track Reviews. Add or replace feeds in `~/.config/omadora/feeds.toml`:
+
+```toml
+[[feed]]
+name = "Pitchfork: Best New Albums"
+url = "https://pitchfork.com/feed/reviews/best/albums/rss"
+match = "pitchfork"
+
+[[feed]]
+name = "The Quietus: Reviews"
+url = "https://thequietus.com/feed/"
+match = "title"
+```
+
+`match` says how to tell what an article is about: `pitchfork` (Pitchfork's review titles and links), `title` (titles like "Artist – Album" or "Artist, “Album”"), `tags` (the article's categories name artists), or `none` (show it, match nothing). When the file has feeds, they replace the defaults, so list Pitchfork's too if you want to keep them. A magazine with its own style needs a small parser in `engine/src/discover.rs`.
+
 ## Sign in
 
 The engine signs in with the Pandora account in a file that stays on this machine:

@@ -19,10 +19,12 @@
 //!   createStation {seed}           make a station from an AR: or TR: id and play it
 //!   thumbUp | thumbDown | tired    feedback on the radio track playing
 //!   listenHere                     take the account over from another device
+//!   discover {refresh?}            magazine articles, matched to albums, songs, artists
 //!   modes {station}                a station's modes and which is on
 //!   setMode {station, mode}        switch it; the next song is in the new mode
 
 use crate::catalog;
+use crate::discover;
 use crate::radio;
 use crate::engine::{Cmd, Shared};
 use anyhow::{Result, anyhow};
@@ -159,6 +161,10 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         "thumbDown" => control(Cmd::ThumbDown),
         "tired" => control(Cmd::Tired),
         "listenHere" => control(Cmd::ListenHere),
+        "discover" => {
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in to Pandora"))?;
+            Ok(discover::snapshot(pandora, request["refresh"].as_bool().unwrap_or(false)))
+        }
         "stations" | "modes" | "setMode" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in to Pandora"))?;
             match cmd {

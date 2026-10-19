@@ -17,6 +17,18 @@ Item {
   property bool moreOpen: false
   property point moreAt: Qt.point(0, 0)
 
+  // Two places to be: Music (stations, the player, up next) and Discover
+  // (the magazine). Pages from either open under Music.
+  property string section: "music"
+
+  function showSection(name) {
+    section = name
+    if (name === "music")
+      showNow()
+    else
+      loadDiscover(false)
+  }
+
   // The middle column shows the track, or a page from the catalog. Pages
   // stack, so Back retraces artist → album → artist.
   property var page: null
@@ -46,8 +58,10 @@ Item {
 
   function showSearch(query) {
     var q = String(query || "").trim()
-    if (q !== "")
-      open({ kind: "search", query: q })
+    if (q === "")
+      return
+    section = "music"
+    open({ kind: "search", query: q })
   }
 
   // Ids when the engine is playing; names when the radio is.
@@ -94,12 +108,37 @@ Item {
     })
   }
 
+  // Discover: magazine articles, matched to albums, songs, and artists.
+  property var discover: null
+  property bool discoverLoading: false
+
+  function loadDiscover(refresh) {
+    if (discoverLoading || !root.engine.signedIn)
+      return
+    discoverLoading = true
+    root.engine.request("discover", { refresh: refresh === true }, function (ok, result) {
+      root.discoverLoading = false
+      if (ok)
+        root.discover = result
+    })
+  }
+
+  // Matching runs in the engine after the feeds load; check back until done.
+  Timer {
+    interval: 3000
+    repeat: true
+    running: root.section === "discover" && root.discover !== null && root.discover.pending > 0
+    onTriggered: root.loadDiscover(false)
+  }
+
   onSideTabChanged: if (sideTab === "playlists") loadPlaylists()
   Connections {
     target: root.engine
     function onSignedInChanged() {
       if (root.sideTab === "playlists")
         root.loadPlaylists()
+      if (root.section === "discover")
+        root.loadDiscover(false)
     }
   }
 
@@ -284,6 +323,7 @@ Item {
       height: Style.space(52)
 
       OmadoraLogo {
+        id: logo
         anchors.left: parent.left
         anchors.leftMargin: Style.space(18)
         anchors.verticalCenter: parent.verticalCenter
@@ -292,10 +332,56 @@ Item {
         wordColor: root.theme.strong
       }
 
+      Row {
+        anchors.left: logo.right
+        anchors.leftMargin: Style.space(36)
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        spacing: Style.space(26)
+
+        Repeater {
+          model: [{ key: "music", label: "Music" }, { key: "discover", label: "Discover" }]
+          delegate: Item {
+            required property var modelData
+            readonly property bool selected: root.section === modelData.key
+            width: navLabel.implicitWidth
+            height: parent.height
+
+            Label {
+              id: navLabel
+              anchors.verticalCenter: parent.verticalCenter
+              text: modelData.label
+              color: parent.selected ? root.theme.strong : (navArea.containsMouse ? root.theme.fg : root.theme.muted)
+              font.pixelSize: Style.font.body
+              font.bold: parent.selected
+            }
+
+            // The section you are in is underlined in the accent.
+            Rectangle {
+              visible: parent.selected
+              anchors.bottom: parent.bottom
+              width: parent.width
+              height: Style.space(2)
+              color: root.theme.accent
+            }
+
+            MouseArea {
+              id: navArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.showSection(modelData.key)
+            }
+          }
+        }
+      }
+
       Rectangle {
-        x: root.showStations ? root.sideWidth : Style.space(140)
+        id: searchBox
+        anchors.right: headerTools.left
+        anchors.rightMargin: Style.space(22)
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(Style.space(120), Math.min(Style.space(320), parent.width - x - Style.space(220)))
+        width: Math.max(Style.space(160), Math.min(Style.space(320), parent.width - Style.space(560)))
         height: Style.space(34)
         radius: Style.cornerRadius
         color: root.theme.surface
@@ -351,6 +437,7 @@ Item {
       }
 
       Row {
+        id: headerTools
         anchors.right: parent.right
         anchors.rightMargin: Style.space(18)
         anchors.verticalCenter: parent.verticalCenter
@@ -400,7 +487,7 @@ Item {
     // Left: stations.
     Rectangle {
       id: stationCol
-      visible: root.showStations
+      visible: root.section === "music" && root.showStations
       anchors.top: header.bottom
       anchors.bottom: parent.bottom
       width: root.sideWidth
@@ -568,7 +655,7 @@ Item {
     // Right: up next and history.
     Item {
       id: queueCol
-      visible: root.showQueue
+      visible: root.section === "music" && root.showQueue
       anchors.top: header.bottom
       anchors.bottom: parent.bottom
       anchors.right: parent.right
@@ -711,6 +798,7 @@ Item {
     // Middle: the track.
     Item {
       id: stage
+      visible: root.section === "music"
       anchors.top: header.bottom
       anchors.bottom: parent.bottom
       anchors.left: stationCol.right
@@ -1074,6 +1162,26 @@ Item {
             return active
           }
         }
+      }
+    }
+
+    DiscoverView {
+      anchors.top: header.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      visible: root.section === "discover"
+      engine: root.engine
+      player: root.player
+      theme: root.theme
+      fontFamily: root.fontFamily
+      discover: root.discover
+      loading: root.discoverLoading
+      onRefresh: root.loadDiscover(true)
+      onShowPlayer: root.showSection("music")
+      onOpen: function (next) {
+        root.section = "music"
+        root.open(next)
       }
     }
 
