@@ -633,7 +633,7 @@ Item {
       id: stationCol
       visible: root.section === "music" && root.showStations
       anchors.top: header.bottom
-      anchors.bottom: parent.bottom
+      anchors.bottom: nowBar.top
       width: root.sideWidth
       color: root.theme.surface
 
@@ -801,7 +801,7 @@ Item {
       id: queueCol
       visible: root.section === "music" && root.showQueue
       anchors.top: header.bottom
-      anchors.bottom: parent.bottom
+      anchors.bottom: nowBar.top
       anchors.right: parent.right
       width: root.queueWidth
 
@@ -1174,7 +1174,7 @@ Item {
       id: stage
       visible: root.section === "music"
       anchors.top: header.bottom
-      anchors.bottom: parent.bottom
+      anchors.bottom: nowBar.top
       anchors.left: stationCol.right
       anchors.right: queueCol.left
 
@@ -1543,7 +1543,7 @@ Item {
       anchors.top: header.bottom
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.bottom: parent.bottom
+      anchors.bottom: nowBar.top
       visible: root.section === "discover"
       engine: root.engine
       player: root.player
@@ -1552,10 +1552,26 @@ Item {
       discover: root.discover
       loading: root.discoverLoading
       onRefresh: root.loadDiscover(true)
-      onShowPlayer: root.showSection("music")
       onOpen: function (next) {
         root.section = "music"
         root.open(next)
+      }
+    }
+
+    // Along the bottom wherever the now-playing view isn't (Discover, or a
+    // page under Music), while a song is loaded: a way back to it.
+    NowPlayingBar {
+      id: nowBar
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      wanted: root.section === "discover" || root.view !== "now"
+      player: root.player
+      theme: root.theme
+      fontFamily: root.fontFamily
+      onShowPlayer: {
+        root.section = "music"
+        root.showNow()
       }
     }
 

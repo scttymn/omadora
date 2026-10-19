@@ -21,7 +21,6 @@ Item {
 
   signal open(var page)
   signal refresh()
-  signal showPlayer()
 
   readonly property var items: {
     var all = discover ? discover.items : []
@@ -255,7 +254,7 @@ Item {
     id: grid
     visible: root.withPictures.length > 0
     anchors.top: bar.bottom
-    anchors.bottom: strip.top
+    anchors.bottom: parent.bottom
     anchors.left: parent.left
     anchors.right: rail.visible ? rail.left : parent.right
     anchors.leftMargin: Style.space(28) - gap / 2
@@ -398,7 +397,7 @@ Item {
     id: rail
     visible: root.headlines.length > 0
     anchors.top: bar.bottom
-    anchors.bottom: strip.top
+    anchors.bottom: parent.bottom
     anchors.right: parent.right
     anchors.rightMargin: Style.space(28)
     // Beside the grid; the whole page when there is nothing with a picture.
@@ -524,123 +523,5 @@ Item {
     color: root.theme.muted
     font.pixelSize: Style.font.body
     horizontalAlignment: Text.AlignHCenter
-  }
-
-  // ---- what's playing, to control it while reading
-
-  Rectangle {
-    id: strip
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-    height: root.player.title !== "" ? Style.space(64) : 0
-    visible: height > 0
-    color: root.theme.surface
-
-    ArtMark {
-      id: stripArt
-      anchors.left: parent.left
-      anchors.leftMargin: Style.space(18)
-      anchors.verticalCenter: parent.verticalCenter
-      width: Style.space(44)
-      height: width
-      rings: false
-      art: root.theme.art
-      artUrl: root.player.artUrl
-    }
-
-    Column {
-      anchors.left: stripArt.right
-      anchors.leftMargin: Style.space(14)
-      anchors.right: stripControls.left
-      anchors.rightMargin: Style.space(14)
-      anchors.verticalCenter: parent.verticalCenter
-      spacing: Style.space(2)
-
-      Label {
-        width: parent.width
-        text: root.player.title
-        color: stripArea.containsMouse ? root.theme.accent : root.theme.strong
-        font.pixelSize: Style.font.body
-        font.bold: true
-      }
-
-      Label {
-        width: parent.width
-        text: [root.player.artist, root.player.sourceLabel].filter(function (s) { return s }).join("  ·  ")
-        color: root.theme.muted
-        font.pixelSize: Style.font.caption
-      }
-    }
-
-    MouseArea {
-      id: stripArea
-      anchors.left: parent.left
-      anchors.right: stripControls.left
-      anchors.top: parent.top
-      anchors.bottom: parent.bottom
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: root.showPlayer()
-    }
-
-    Row {
-      id: stripControls
-      anchors.right: parent.right
-      anchors.rightMargin: Style.space(18)
-      anchors.verticalCenter: parent.verticalCenter
-      spacing: Style.space(6)
-
-      // The same five as the mini player.
-      IconButton {
-        theme: root.theme
-        anchors.verticalCenter: parent.verticalCenter
-        // Radio rates songs; on demand there is a previous track instead.
-        icon: root.player.onDemand ? "󰒮" : (root.player.rating === 2 ? "󰔑" : "󰔒")
-        active: !root.player.onDemand && root.player.rating === 2
-        enabled: root.player.onDemand ? root.player.canGoBack : root.player.canRate
-        fontFamily: root.fontFamily
-        onActivated: root.player.onDemand ? root.player.previous() : root.player.thumbDown()
-      }
-
-      IconButton {
-        theme: root.theme
-        anchors.verticalCenter: parent.verticalCenter
-        icon: "󰦛"
-        enabled: root.player.canReplay
-        fontFamily: root.fontFamily
-        onActivated: root.player.replay()
-      }
-
-      IconButton {
-        theme: root.theme
-        anchors.verticalCenter: parent.verticalCenter
-        width: Style.space(44)
-        icon: root.player.loading ? "󰔟" : (root.player.playing ? "󰏤" : "󰐊")
-        primary: true
-        iconSize: Style.font.iconLarge
-        fontFamily: root.fontFamily
-        onActivated: root.player.playPause()
-      }
-
-      IconButton {
-        theme: root.theme
-        anchors.verticalCenter: parent.verticalCenter
-        icon: "󰒭"
-        enabled: root.player.canGoNext
-        fontFamily: root.fontFamily
-        onActivated: root.player.next()
-      }
-
-      IconButton {
-        theme: root.theme
-        anchors.verticalCenter: parent.verticalCenter
-        icon: root.player.rating === 1 ? "󰔓" : "󰔔"
-        active: root.player.rating === 1
-        enabled: root.player.canRate
-        fontFamily: root.fontFamily
-        onActivated: root.player.thumbUp()
-      }
-    }
   }
 }
