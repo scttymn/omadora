@@ -8,6 +8,15 @@ Pandora in the Omarchy bar.
 > and it needs your own Pandora account. Pandora is a trademark of Pandora
 > Media, LLC; the Omadora lettering is a nod to its wordmark.
 
+![Omadora on an Omarchy desktop: the mini player under the bar, and the full player as a window](docs/desktop.webp)
+
+<p>
+  <img src="docs/music.webp" width="49%" alt="The full player: stations, the track playing, and history">
+  <img src="docs/discover.webp" width="49%" alt="Discover: Pitchfork reviews as cards, Rolling Stone headlines down the side">
+</p>
+
+<p align="center"><img src="docs/widget.png" width="410" alt="The mini player, opened from the bar"></p>
+
 The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app: stations and playlists on the left, the track in the middle, up next and history on the right. The shrink control returns to the mini player. Colors come from the active Omarchy theme.
 
 `omadora-engine` (in `engine/`) plays everything: your radio stations, Shuffle, and albums, playlists, and songs on demand. It also serves the catalog: search, artist pages, albums, and playlists. On demand, the controls are previous, replay, play, and next. On radio they are thumbs, replay, play, skip, tired, and the station's modes, within what Pandora allows for each song. Drag the progress bar to scrub wherever replays are allowed. Volume is the system output.
