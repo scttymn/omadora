@@ -55,32 +55,40 @@ match = "title"
 
 `match` says how to tell what an article is about: `pitchfork` (Pitchfork's review titles and links), `title` (titles like "Artist – Album" or "Artist, “Album”"), `tags` (the article's categories name artists; section tags like "Music News" are skipped, and artists in the headline come first), `headline` (the headline starts with the artist's name, as in "Orbital Revisits…"; a column's name before a colon is skipped, and the article must mention the artist too), or `none` (show it, match nothing). A tag can name someone outside music who shares a name with an artist; that article then links to the artist. When the file has feeds, they replace the defaults, so list Pitchfork's too if you want to keep them. Most magazines publish standard RSS (many from WordPress), so a new one usually needs only the right `match`; one with its own style needs a small matcher in `engine/src/discover.rs`.
 
+## Install
+
+```bash
+omarchy plugin add https://github.com/scttymn/omadora.git --enable
+```
+
+On first start, the widget downloads the Omadora engine for this version from the project's [GitHub releases](https://github.com/scttymn/omadora/releases) into the plugin's `bin/`, and uses it only if it matches the SHA-256 recorded in `engine-release.json`. `omarchy plugin update scttymn.omadora` brings a new version; the widget then fetches its engine and restarts it. Radio needs ffmpeg, which is part of Omarchy. Engines are released for x86_64 and aarch64.
+
+To remove it: `omarchy plugin remove scttymn.omadora`. Signing out first also clears the saved account from the keyring.
+
 ## Sign in
 
-The engine signs in with the Pandora account in a file that stays on this machine:
+Open the player and sign in with your Pandora email and password. The engine checks them with Pandora, then keeps the password in your system keyring (via `secret-tool`) and the email in `~/.config/omadora/account`; the password is never written to a file. Sign out from the account button in the full player's header, which forgets both and stops playback.
+
+Any Pandora account works: free accounts get radio, and Plus and Premium add what Pandora gives them (replays, skips, albums and playlists on demand).
+
+For a setup without a keyring, the engine also reads pianobar's config when no account has been saved from the player:
 
 ```text
 ~/.config/omadora/pianobar/config
 ```
 
-The file is mode 600. It is not part of this checkout. Put your email and password there:
-
 ```text
 user = you@example.com
-password = your-password
-```
-
-A password command works in place of `password`:
-
-```text
 password_command = secret-tool lookup service pandora
 ```
 
+(`password = …` works in place of `password_command`; keep the file mode 600.)
+
 The engine listens on `$XDG_RUNTIME_DIR/omadora/engine.sock` and keeps its session beside it; [engine/README.md](engine/README.md) has its protocol and how it signs in.
 
-## Install
+## Development
 
-The engine needs a Rust toolchain to build, and ffmpeg (part of Omarchy) to decode radio. From this checkout:
+The engine needs a Rust toolchain. From a checkout:
 
 ```bash
 make install
@@ -88,4 +96,6 @@ omarchy-shell shell rescanPlugins
 omarchy plugin enable scttymn.omadora right
 ```
 
-`make install` builds the engine into `bin/`, copies the plugin to `~/.config/omarchy/plugins/scttymn.omadora` (Omarchy will not load a symlinked plugin), and stops a running engine so the widget starts the new one. Saving a file under that plugin directory reloads it, though a changed QML type sometimes needs `omarchy-restart-shell`.
+`make install` builds the engine into `bin/`, copies the plugin to `~/.config/omarchy/plugins/scttymn.omadora` (Omarchy will not load a symlinked plugin), and stops a running engine so the widget starts the new one. A build from `make` is never replaced by a download. Saving a file under that plugin directory reloads it, though a changed QML type sometimes needs `omarchy-restart-shell`.
+
+To release: bump the version in `manifest.json` and `engine/Cargo.toml`, tag `vX.Y.Z` and push the tag. The release workflow builds the engines and attaches them to a GitHub release; then `make pin VERSION=X.Y.Z` records their checksums in `engine-release.json`, and committing that lets installs download it.

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Make bin/omadora-engine the engine release this checkout pins in
+# engine-release.json, downloading it from GitHub if it is missing or older.
+# The download must match the pinned SHA-256, so the repository vouches for
+# the exact file. A development build from `make` (no release mark) is left
+# alone.
+#
+# Prints one line for the widget: "ok", "updated" (the binary was replaced),
+# "warning: …" (kept the engine it had), or "error: …" (there is none).
+# Exits non-zero only on an error.
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+pin="$here/engine-release.json"
+bin="$here/bin/omadora-engine"
+mark="$here/bin/omadora-engine.release"
+repo="scttymn/omadora"
+
+have_engine() { [[ -x $bin ]]; }
+
+# Keep a working engine when a new one cannot be had; fail only without one.
+give_up() {
+  if have_engine; then
+    echo "warning: $1"
+    exit 0
+  fi
+  echo "error: $1"
+  exit 1
+}
+
+if have_engine && [[ ! -e $mark ]]; then
+  echo ok
+  exit 0
+fi
+
+[[ -f $pin ]] || give_up "This copy of Omadora pins no engine release. Build one with: make engine"
+
+version=$(jq -r '.version // empty' "$pin")
+arch=$(uname -m)
+sum=$(jq -r --arg arch "$arch" '.sha256[$arch] // empty' "$pin")
+[[ -n $version && -n $sum ]] || give_up "No Omadora engine is released for $arch. Build one with: make engine"
+
+wanted="$version $sum"
+if have_engine && [[ $(cat "$mark" 2>/dev/null) == "$wanted" ]]; then
+  echo ok
+  exit 0
+fi
+
+mkdir -p "$here/bin"
+tmp=$(mktemp "$here/bin/.omadora-engine.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+
+url="https://github.com/$repo/releases/download/v$version/omadora-engine-$arch-linux"
+curl -fsSL --retry 2 --connect-timeout 15 -o "$tmp" "$url" ||
+  give_up "Couldn't download the Omadora engine $version from GitHub."
+
+got=$(sha256sum "$tmp" | cut -d' ' -f1)
+[[ $got == "$sum" ]] || give_up "The downloaded Omadora engine did not match its checksum, so it was not used."
+
+chmod 755 "$tmp"
+mv -f "$tmp" "$bin"
+printf '%s\n' "$wanted" >"$mark"
+echo updated

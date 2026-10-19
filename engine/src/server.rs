@@ -19,6 +19,8 @@
 //!   createStation {seed}           make a station from an AR: or TR: id and play it
 //!   thumbUp | thumbDown | tired    feedback on the radio track playing
 //!   listenHere                     take the account over from another device
+//!   signIn {user, password}        sign in, and save the account once Pandora accepts it
+//!   signOut                        forget the saved account and stop
 //!   discover {refresh?}            magazine articles, matched to albums, songs, artists
 //!   image {url}                    an article's picture as a local file, cached
 //!   modes {station}                a station's modes and which is on
@@ -162,6 +164,23 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         "thumbDown" => control(Cmd::ThumbDown),
         "tired" => control(Cmd::Tired),
         "listenHere" => control(Cmd::ListenHere),
+        "signIn" => {
+            let user = arg(request, "user")?.trim();
+            let password = arg(request, "password")?;
+            if user.is_empty() || password.is_empty() {
+                return Err(anyhow!("Enter your Pandora email and password."));
+            }
+            // Checked here, on the request's own thread, so the form hears
+            // whether Pandora accepted it.
+            let pandora = crate::pandora::Pandora::sign_in_with(user, password)?;
+            shared.send(Cmd::SignedIn(Ok(pandora)));
+            Ok(json!({}))
+        }
+        "signOut" => {
+            crate::pandora::forget();
+            shared.send(Cmd::SignedOut);
+            Ok(json!({}))
+        }
         "image" => Ok(json!({ "path": discover::image(arg(request, "url")?)?.to_string_lossy() })),
         "discover" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in to Pandora"))?;

@@ -32,6 +32,7 @@ QtObject {
   // Another device has the account. Taking it over is the listener's call,
   // as with Pandora's own "Let me listen".
   readonly property bool busy: engine.busy
+  readonly property bool needsAccount: engine.needsAccount
   function listenHere() { engine.listenHere() }
 
   // What the player is playing from: a station, album, playlist, or song.
@@ -210,6 +211,8 @@ QtObject {
     function onSignedInChanged() {
       if (root.engine.signedIn)
         root.refreshStations()
+      else if (root.engine.needsAccount)
+        root.stations = []
     }
   }
 

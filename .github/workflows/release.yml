@@ -1,0 +1,53 @@
+# Tagging vX.Y.Z builds the engine for Linux and attaches it to a GitHub
+# release. Then `make pin VERSION=X.Y.Z` records the binaries' SHA-256 in
+# engine-release.json, and the widget downloads that release on first run.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  engine:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      # ALSA for playback. Ubuntu 22.04's older glibc keeps the binary
+      # running on older systems as well as current Arch.
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked --manifest-path engine/Cargo.toml
+      - name: Package
+        run: |
+          name="omadora-engine-${{ matrix.arch }}-linux"
+          cp engine/target/release/omadora-engine "$name"
+          sha256sum "$name" > "$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.arch }}
+          path: omadora-engine-*
+
+  release:
+    needs: engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" omadora-engine-* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Omadora $GITHUB_REF_NAME" \
+            --notes "The Omadora engine for Linux. The widget downloads it on first run and checks it against the SHA-256 in engine-release.json."

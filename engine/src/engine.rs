@@ -52,6 +52,7 @@ pub enum Cmd {
     Tired,
     ModeChanged,
     ListenHere,
+    SignedOut,
     // From helper threads.
     SignedIn(Result<Arc<Pandora>, String>),
     Queued { generation: u64, source: String, name: String, tracks: Vec<Value>, track: Option<String>, index: Option<usize> },
@@ -176,6 +177,8 @@ struct Engine {
     status: Status,
     signing_in: bool,
     retry_sign_in: Option<Instant>,
+    // No account is saved; the widget asks for one.
+    needs_account: bool,
     radio: bool,
     station: Value,
     source: String,
@@ -221,6 +224,7 @@ pub fn start() -> anyhow::Result<Arc<Shared>> {
         status: Status::Idle,
         signing_in: false,
         retry_sign_in: None,
+        needs_account: false,
         radio: false,
         station: Value::Null,
         source: String::new(),
@@ -311,16 +315,45 @@ impl Engine {
                 match result {
                     Ok(pandora) => {
                         *self.shared.pandora.write().unwrap() = Some(pandora);
+                        self.needs_account = false;
+                        self.retry_sign_in = None;
                         self.error.clear();
                         if self.source.is_empty() && self.queue.is_empty() {
                             self.restore();
                         }
+                    }
+                    // Nothing to sign in with: wait for the widget's form.
+                    Err(error) if error.contains(crate::pandora::NO_ACCOUNT) => {
+                        self.needs_account = true;
+                        self.error.clear();
                     }
                     Err(error) => {
                         self.error = error;
                         self.retry_sign_in = Some(Instant::now() + Duration::from_secs(30));
                     }
                 }
+                self.publish();
+            }
+            Cmd::SignedOut => {
+                // The account is forgotten already; drop everything it played.
+                self.generation += 1;
+                self.stop_audio();
+                self.clock.set(0.0, false);
+                self.status = Status::Idle;
+                *self.shared.pandora.write().unwrap() = None;
+                self.radio = false;
+                self.station = Value::Null;
+                self.source.clear();
+                self.source_name.clear();
+                self.queue.clear();
+                self.index = None;
+                self.history.clear();
+                self.cache.clear();
+                self.error.clear();
+                self.busy = false;
+                self.retry_sign_in = None;
+                self.needs_account = true;
+                let _ = std::fs::remove_file(resume_path());
                 self.publish();
             }
             Cmd::Play { source, track, index } => self.play(source, track, index),
@@ -608,8 +641,12 @@ impl Engine {
     fn pandora(&mut self) -> Option<Arc<Pandora>> {
         let found = self.shared.pandora();
         if found.is_none() {
-            self.sign_in();
-            self.fail("Still signing in to Pandora.".into());
+            if self.needs_account {
+                self.fail("Sign in to Pandora first.".into());
+            } else {
+                self.sign_in();
+                self.fail("Still signing in to Pandora.".into());
+            }
         }
         found
     }
@@ -973,6 +1010,8 @@ impl Engine {
             "status": self.status.name(),
             "mode": if self.source.is_empty() { "" } else if self.radio { "radio" } else { "ondemand" },
             "signedIn": account.is_some(),
+            "needsAccount": self.needs_account,
+            "user": if account.is_some() { crate::pandora::saved_user() } else { None },
             "account": account.map(|a| json!({ "subscriber": a.subscriber, "audioAds": a.audio_ads })),
             "source": { "id": self.source, "name": self.source_name },
             "station": if self.radio { self.station.clone() } else { Value::Null },

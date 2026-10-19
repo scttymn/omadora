@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Record a published engine release in engine-release.json: its version and
+# each binary's SHA-256, read from the release's .sha256 files.
+#   scripts/pin-engine 0.3.0
+
+set -euo pipefail
+
+version=${1:?usage: scripts/pin-engine VERSION}
+here=$(cd "$(dirname "$0")/.." && pwd)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+gh release download "v$version" --repo scttymn/omadora --pattern '*.sha256' --dir "$work"
+sums=$(cat "$work"/*.sha256 |
+  sed -E 's/^([0-9a-f]{64}) +\*?omadora-engine-([a-z0-9_]+)-linux$/\2 \1/' |
+  jq -R -s 'split("\n") | map(select(length > 0) | split(" ") | {(.[0]): .[1]}) | add')
+jq -n --arg version "$version" --argjson sha256 "$sums" '{version: $version, sha256: $sha256}' >"$here/engine-release.json"
+cat "$here/engine-release.json"

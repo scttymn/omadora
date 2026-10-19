@@ -31,11 +31,58 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
 }
 
-/// The account's email and password. Omadora keeps them in the same file
-/// pianobar reads, so both engines sign in with one setup.
+/// The sign-in error when no account is saved; the widget then asks for one.
+pub const NO_ACCOUNT: &str = "No Pandora account is saved yet";
+
+fn config_dir() -> PathBuf {
+    let base = std::env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home().join(".config"));
+    base.join("omadora")
+}
+
+/// The email of the account signed in from the widget. The password is in
+/// the system keyring (libsecret), never in a file.
+fn account_path() -> PathBuf {
+    config_dir().join("account")
+}
+
+/// pianobar's config, for anyone who set Omadora up by hand.
+fn pianobar_path() -> PathBuf {
+    config_dir().join("pianobar").join("config")
+}
+
+fn setting(text: &str, name: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(key, _)| key.trim() == name)
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// The keyring entry's attributes, as `secret-tool` takes them.
+fn keyring_entry(user: &str) -> [&str; 4] {
+    ["application", "omadora", "user", user]
+}
+
+/// The email of the saved account, if there is one.
+pub fn saved_user() -> Option<String> {
+    let own = fs::read_to_string(account_path()).ok().and_then(|t| setting(&t, "user"));
+    own.or_else(|| fs::read_to_string(pianobar_path()).ok().and_then(|t| setting(&t, "user")))
+}
+
+/// The account's email and password: the one signed in from the widget, or
+/// else the one in pianobar's config.
 pub fn credentials() -> Result<(String, String)> {
-    let path = home().join(".config/omadora/pianobar/config");
-    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    if let Some(user) = fs::read_to_string(account_path()).ok().and_then(|t| setting(&t, "user")) {
+        let out = Command::new("secret-tool").arg("lookup").args(keyring_entry(&user)).output();
+        let password = out.ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
+        if password.is_empty() {
+            // The keyring lost it (or is locked); ask again.
+            bail!(NO_ACCOUNT);
+        }
+        return Ok((user, password));
+    }
+    let path = pianobar_path();
+    let Ok(text) = fs::read_to_string(&path) else { bail!(NO_ACCOUNT) };
     let (mut user, mut password, mut command) = (None, None, None);
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
@@ -89,6 +136,47 @@ pub struct Account {
     pub audio_ads: bool,
 }
 
+/// Keep a newly accepted account: the password in the keyring, the email in
+/// the account file. Any account saved before is replaced.
+fn remember(user: &str, password: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::process::Stdio;
+    let _ = Command::new("secret-tool").args(["clear", "application", "omadora"]).output();
+    let mut child = Command::new("secret-tool")
+        .args(["store", "--label=Omadora: Pandora account"])
+        .args(keyring_entry(user))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("saving the password needs secret-tool (libsecret)")?;
+    child.stdin.take().context("secret-tool's input")?.write_all(password.as_bytes())?;
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!("the keyring did not save the password ({})", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    let path = account_path();
+    fs::create_dir_all(config_dir())?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut f| f.write_all(format!("user = {user}\n").as_bytes()))
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// Sign out: forget the saved account and the session. pianobar's config,
+/// if there is one, is left alone.
+pub fn forget() {
+    let _ = Command::new("secret-tool").args(["clear", "application", "omadora"]).output();
+    let _ = fs::remove_file(account_path());
+    let _ = fs::remove_file(session_path());
+}
+
 /// Pandora treats every sign-in as a separate listener, and only one may
 /// play at a time. Keeping the session across engine restarts keeps the
 /// engine the same listener. It lives in the runtime dir: private to the
@@ -130,7 +218,7 @@ fn save_session(token: &str, account: &Account) {
 }
 
 /// Partner login, then user login. Returns the user token and the account.
-fn device_sign_in(http: &Client) -> Result<(String, Account)> {
+fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, Account)> {
     let partner: Value = http
         .post(format!("{TUNER}?method=auth.partnerLogin"))
         .json(&json!({
@@ -155,7 +243,6 @@ fn device_sign_in(http: &Client) -> Result<(String, Account)> {
         other => other.to_string(),
     };
 
-    let (user, password) = credentials()?;
     let body = json!({
         "loginType": "user",
         "username": user,
@@ -226,7 +313,18 @@ pub struct Pandora {
 }
 
 impl Pandora {
+    /// Sign in with the saved account, reusing the last session if there is one.
     pub fn sign_in() -> Result<Arc<Self>> {
+        Self::connect(None)
+    }
+
+    /// Sign in with an email and password from the widget, and save them once
+    /// Pandora accepts them.
+    pub fn sign_in_with(user: &str, password: &str) -> Result<Arc<Self>> {
+        Self::connect(Some((user, password)))
+    }
+
+    fn connect(given: Option<(&str, &str)>) -> Result<Arc<Self>> {
         let jar = Arc::new(Jar::default());
         let http = Client::builder()
             .cookie_provider(jar.clone())
@@ -252,10 +350,17 @@ impl Pandora {
             });
         // Reuse the last session if there is one; a stale one is renewed on
         // the first call Pandora rejects.
-        let (token, account) = match load_session() {
-            Some(saved) => saved,
-            None => {
-                let fresh = device_sign_in(&http)?;
+        let (token, account) = match (given, load_session()) {
+            (Some((user, password)), _) => {
+                let fresh = device_sign_in(&http, user, password)?;
+                remember(user, password)?;
+                save_session(&fresh.0, &fresh.1);
+                fresh
+            }
+            (None, Some(saved)) => saved,
+            (None, None) => {
+                let (user, password) = credentials()?;
+                let fresh = device_sign_in(&http, &user, &password)?;
                 save_session(&fresh.0, &fresh.1);
                 fresh
             }
@@ -268,7 +373,8 @@ impl Pandora {
     }
 
     fn renew(&self) -> Result<()> {
-        let (token, account) = device_sign_in(&self.http)?;
+        let (user, password) = credentials()?;
+        let (token, account) = device_sign_in(&self.http, &user, &password)?;
         save_session(&token, &account);
         *self.token.lock().unwrap() = token;
         *self.account.lock().unwrap() = account;

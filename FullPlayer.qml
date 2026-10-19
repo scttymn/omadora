@@ -16,6 +16,8 @@ Item {
   property string stationQuery: ""
   property bool moreOpen: false
   property point moreAt: Qt.point(0, 0)
+  property bool accountOpen: false
+  property point accountAt: Qt.point(0, 0)
 
   // Two places to be: Music (stations, the player, up next) and Discover
   // (the magazine). Pages from either open under Music.
@@ -135,6 +137,13 @@ Item {
   Connections {
     target: root.engine
     function onSignedInChanged() {
+      // Signed out (or a new account): the playlists were someone else's.
+      if (!root.engine.signedIn) {
+        root.playlists = []
+        root.playlistsLoaded = false
+        root.playlistsError = ""
+        return
+      }
       if (root.sideTab === "playlists")
         root.loadPlaylists()
       if (root.section === "discover")
@@ -378,6 +387,7 @@ Item {
 
       Rectangle {
         id: searchBox
+        visible: !root.engine.needsAccount
         anchors.right: headerTools.left
         anchors.rightMargin: Style.space(22)
         anchors.verticalCenter: parent.verticalCenter
@@ -463,6 +473,22 @@ Item {
         }
 
         Item { width: Style.space(12); height: 1 }
+
+        IconButton {
+          id: accountButton
+          visible: root.engine.signedIn
+          theme: root.theme
+          icon: "󰀄"
+          width: Style.space(30)
+          iconSize: Style.font.title
+          fontFamily: root.fontFamily
+          active: root.accountOpen
+          anchors.verticalCenter: parent.verticalCenter
+          onActivated: {
+            root.accountAt = mapToItem(root, width, height)
+            root.accountOpen = !root.accountOpen
+          }
+        }
 
         IconButton {
           theme: root.theme
@@ -1185,11 +1211,86 @@ Item {
       }
     }
 
+    SignInView {
+      anchors.top: header.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      visible: root.engine.needsAccount
+      engine: root.engine
+      theme: root.theme
+      fontFamily: root.fontFamily
+    }
+
     // The overflow menu under the "more" button.
     MouseArea {
       anchors.fill: parent
       visible: root.moreOpen
       onClicked: root.moreOpen = false
+    }
+
+    // The account menu: who is signed in, and Sign out.
+    MouseArea {
+      anchors.fill: parent
+      visible: root.accountOpen
+      onClicked: root.accountOpen = false
+    }
+
+    Rectangle {
+      visible: root.accountOpen && root.engine.signedIn
+      x: Math.min(parent.width - width - Style.space(8), root.accountAt.x - width)
+      y: root.accountAt.y + Style.space(6)
+      width: Math.max(accountLabel.implicitWidth, signOutLabel.implicitWidth) + Style.space(28)
+      height: accountColumn.implicitHeight + Style.space(16)
+      radius: Style.cornerRadius
+      color: root.theme.surface
+      border.color: root.theme.border
+      border.width: 1
+
+      Column {
+        id: accountColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+
+        Label {
+          id: accountLabel
+          visible: root.engine.user !== ""
+          x: Style.space(14)
+          height: Style.space(32)
+          verticalAlignment: Text.AlignVCenter
+          text: "Signed in as " + root.engine.user
+          color: root.theme.muted
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        Rectangle {
+          width: parent.width
+          height: Style.space(34)
+          color: signOutMouse.containsMouse ? root.theme.raised : "transparent"
+
+          Label {
+            id: signOutLabel
+            x: Style.space(14)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Sign out"
+            color: signOutMouse.containsMouse ? root.theme.accent : root.theme.fg
+            font.pixelSize: Style.font.body
+          }
+
+          MouseArea {
+            id: signOutMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.accountOpen = false
+              root.showNow()
+              root.engine.signOut()
+            }
+          }
+        }
+      }
     }
 
     Rectangle {

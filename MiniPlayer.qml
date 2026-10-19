@@ -14,7 +14,7 @@ Item {
   signal albumRequested()
 
   readonly property string stationLabel: player.sourceLabel !== "" ? player.sourceLabel : "Pandora"
-  readonly property bool showNotice: player.title === "" && player.notice !== ""
+  readonly property bool showNotice: player.title === "" && (player.notice !== "" || player.needsAccount)
 
   Rectangle {
     anchors.fill: parent
@@ -115,6 +115,8 @@ Item {
           text: {
             if (root.player.title !== "")
               return root.player.title
+            if (root.player.needsAccount)
+              return "Sign in with your Pandora account to start listening."
             if (root.player.notice !== "")
               return root.player.notice
             if (root.player.loading)
@@ -169,6 +171,34 @@ Item {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: root.albumRequested()
+          }
+        }
+
+        // No account yet: the form is in the full player, where typing works.
+        Rectangle {
+          visible: root.player.needsAccount
+          width: signInLabel.implicitWidth + Style.space(24)
+          height: Style.space(28)
+          radius: Style.cornerRadius
+          color: signInArea.containsMouse ? Qt.lighter(root.theme.accent, 1.08) : root.theme.accent
+
+          Text {
+            id: signInLabel
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: "Sign in"
+            color: root.theme.accentText
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+          }
+
+          MouseArea {
+            id: signInArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.expandRequested()
           }
         }
 

@@ -9,8 +9,14 @@ Item {
   id: root
 
   readonly property string socketPath: Quickshell.env("XDG_RUNTIME_DIR") + "/omadora/engine.sock"
-  // Built into the plugin by `make` (see README).
+  // Downloaded from the pinned GitHub release by scripts/fetch-engine, or
+  // built into the plugin by `make` (see README).
   readonly property string binary: Qt.resolvedUrl("bin/omadora-engine").toString().replace(/^file:\/\//, "")
+  readonly property string fetchScript: Qt.resolvedUrl("scripts/fetch-engine").toString().replace(/^file:\/\//, "")
+  // The engine binary is in place (fetched, or already there).
+  property bool fetched: false
+  // Why there is no engine to start, when there is none.
+  property string startError: ""
 
   property var state: ({})
   property bool online: false
@@ -21,6 +27,9 @@ Item {
 
   readonly property string status: state.status || "idle"
   readonly property bool signedIn: state.signedIn === true
+  // No account is saved; the full player shows the sign-in form.
+  readonly property bool needsAccount: online && state.needsAccount === true
+  readonly property string user: state.user || ""
   readonly property var account: state.account || null
   readonly property bool active: status === "playing" || status === "paused" || status === "loading"
   readonly property bool playing: status === "playing"
@@ -29,7 +38,7 @@ Item {
   readonly property var queue: state.queue || []
   readonly property int index: state.index === undefined || state.index === null ? -1 : state.index
   readonly property var source: state.source || ({ id: "", name: "" })
-  readonly property string error: state.error || ""
+  readonly property string error: state.error || (online ? "" : startError)
   // Another device has the account; listenHere() takes it over.
   readonly property bool busy: state.busy === true
   readonly property double length: track ? Number(track.duration) || 0 : 0
@@ -75,6 +84,8 @@ Item {
   function stop() { request("stop") }
   function seek(seconds) { request("seek", { position: seconds }) }
   function listenHere() { request("listenHere") }
+  function signIn(user, password, done) { request("signIn", { user: user, password: password }, done) }
+  function signOut() { request("signOut") }
 
   function handle(line) {
     var msg
@@ -99,12 +110,54 @@ Item {
   function ensureRunning() {
     if (online || launchTimer.running)
       return
+    if (!fetched) {
+      fetchEngine()
+      return
+    }
     // Back off if it keeps dying, so a broken engine cannot spin.
     if (launches >= 5)
       return
     launches++
     Quickshell.execDetached([binary])
     launchTimer.restart()
+  }
+
+  // Make sure the pinned engine release is in bin/ before starting it.
+  function fetchEngine() {
+    if (fetcher.running || fetchRetry.running)
+      return
+    fetcher.running = true
+  }
+
+  Process {
+    id: fetcher
+    command: ["bash", root.fetchScript]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var line = text.trim().split("\n").pop() || ""
+        if (line.indexOf("error: ") === 0) {
+          root.startError = line.slice(7)
+          fetchRetry.restart()
+          return
+        }
+        root.startError = ""
+        root.fetched = true
+        // A new release replaced the binary under a running engine; stop
+        // that one, and the widget starts the new one.
+        if (line === "updated" && root.online)
+          Quickshell.execDetached(["pkill", "-x", "omadora-engine"])
+        else
+          root.ensureRunning()
+      }
+    }
+  }
+
+  // After a failed download, wait before trying again.
+  Timer {
+    id: fetchRetry
+    interval: 60000
+    onTriggered: root.ensureRunning()
   }
 
   Socket {
@@ -163,6 +216,10 @@ Item {
     onTriggered: root.clock++
   }
 
-  // The first connect can fail without an error signal; check once.
-  Component.onCompleted: retryTimer.restart()
+  // The first connect can fail without an error signal; check once. Check
+  // for a newer pinned engine at the same time (after `omarchy plugin update`).
+  Component.onCompleted: {
+    fetchEngine()
+    retryTimer.restart()
+  }
 }
