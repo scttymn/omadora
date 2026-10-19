@@ -17,6 +17,7 @@
 //!   stations                       the listener's radio stations
 //!   station {id, name?}            play a station; id "shuffle" for Shuffle
 //!   createStation {seed}           make a station from an AR: or TR: id and play it
+//!   removeStation {id}             remove a station from the account; the stations left
 //!   thumbUp | thumbDown | tired    feedback on the radio track playing
 //!   listenHere                     take the account over from another device
 //!   signIn {user, password}        sign in, and save the account once Pandora accepts it
@@ -195,6 +196,13 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         "discover" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             Ok(discover::snapshot(pandora, request["refresh"].as_bool().unwrap_or(false)))
+        }
+        "removeStation" => {
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
+            let id = arg(request, "id")?;
+            let left = radio::remove_station(&pandora, id)?;
+            shared.send(Cmd::StationRemoved(id.to_string()));
+            Ok(left)
         }
         "stations" | "modes" | "setMode" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;

@@ -329,6 +329,39 @@ Item {
     }
   }
 
+  // A line in the now-playing "more" menu.
+  component MoreItem: Rectangle {
+    id: moreItem
+    property string label: ""
+    signal picked()
+    width: parent.width
+    height: Style.space(34)
+    radius: Style.cornerRadius
+    color: itemMouse.containsMouse ? root.theme.raised : "transparent"
+
+    Label {
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(12)
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(12)
+      anchors.verticalCenter: parent.verticalCenter
+      text: moreItem.label
+      color: itemMouse.containsMouse ? root.theme.accent : root.theme.fg
+      font.pixelSize: Style.font.body
+    }
+
+    MouseArea {
+      id: itemMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: {
+        root.moreOpen = false
+        moreItem.picked()
+      }
+    }
+  }
+
   component Caption: Label {
     color: root.theme.faint
     font.pixelSize: Style.font.bodySmall
@@ -374,11 +407,17 @@ Item {
     property color swatch: "transparent"
     property string art: ""
     property bool current: false
+    // Removing asks first, in the row: a station's thumbs go with it.
+    property bool removable: false
+    property bool confirming: false
+    property string problem: ""
     signal picked()
+    signal removeRequested()
 
     height: Style.space(52)
     radius: Style.cornerRadius
-    color: current ? root.theme.raised : (rowMouse.containsMouse ? Util.alpha(root.theme.raised, 0.6) : "transparent")
+    color: confirming ? Util.alpha(root.theme.accent, 0.14)
+      : current ? root.theme.raised : (stationHover.hovered ? Util.alpha(root.theme.raised, 0.6) : "transparent")
 
     ArtMark {
       id: chip
@@ -420,8 +459,8 @@ Item {
 
       Label {
         width: parent.width
-        text: row.detail
-        color: root.theme.muted
+        text: row.problem !== "" ? row.problem : row.detail
+        color: row.problem !== "" ? root.theme.accent : root.theme.muted
         font.pixelSize: Style.font.caption
         visible: text !== ""
       }
@@ -432,8 +471,76 @@ Item {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
+      enabled: !row.confirming
       onClicked: row.picked()
     }
+
+    HoverHandler {
+      id: stationHover
+    }
+
+    IconButton {
+      visible: row.removable && stationHover.hovered && !row.confirming
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(4)
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(28)
+      theme: root.theme
+      icon: "󰅖"
+      iconSize: Style.font.body
+      fontFamily: root.fontFamily
+      onActivated: {
+        row.problem = ""
+        row.confirming = true
+      }
+    }
+
+    // "Remove?" in place of the station, until answered or left.
+    Rectangle {
+      visible: row.confirming
+      anchors.fill: parent
+      radius: Style.cornerRadius
+      color: root.theme.surface
+      border.color: root.theme.accent
+      border.width: 1
+
+      Label {
+        anchors.left: parent.left
+        anchors.leftMargin: Style.space(12)
+        anchors.right: confirmActions.left
+        anchors.rightMargin: Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
+        text: "Remove " + row.name + "?"
+        color: root.theme.strong
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      Row {
+        id: confirmActions
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(12)
+
+        LinkLabel {
+          text: "Remove"
+          color: root.theme.accent
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          onClicked: {
+            row.confirming = false
+            row.removeRequested()
+          }
+        }
+        LinkLabel {
+          text: "Cancel"
+          font.pixelSize: Style.font.bodySmall
+          onClicked: row.confirming = false
+        }
+      }
+    }
+
+    onVisibleChanged: confirming = false
   }
 
   Rectangle {
@@ -761,6 +868,7 @@ Item {
         }
 
         delegate: StationRow {
+          id: stationRow
           required property var modelData
           required property int index
           width: stationList.width
@@ -769,7 +877,14 @@ Item {
           art: modelData.art || ""
           swatch: root.theme.swatch(index)
           current: root.player.isRadio && !root.shuffling && modelData.id === root.player.sourceId
+          removable: modelData.canRemove === true
           onPicked: root.playStation(modelData)
+          onRemoveRequested: {
+            root.player.removeStation(modelData.id, function (ok, error) {
+              if (!ok)
+                stationRow.problem = error
+            })
+          }
         }
       }
 
@@ -1474,7 +1589,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             icon: "󰇘"
             active: root.moreOpen
-            enabled: root.player.canTire
+            enabled: root.player.trackId !== ""
             fontFamily: root.fontFamily
             onActivated: {
               root.moreAt = mapToItem(root, width, height)
@@ -1714,33 +1829,52 @@ Item {
       }
     }
 
+    // The "more" menu: radio from this song or its artist, and on radio,
+    // tired of this song.
     Rectangle {
       visible: root.moreOpen
       x: Math.min(parent.width - width - Style.space(8), root.moreAt.x - width)
       y: root.moreAt.y + Style.space(6)
-      width: tiredLabel.implicitWidth + Style.space(28)
-      height: Style.space(36)
+      width: Math.min(Style.space(320), Math.max(songRadio.implicitWidth, artistRadio.implicitWidth) + Style.space(40))
+      height: moreColumn.implicitHeight + Style.space(12)
       radius: Style.cornerRadius
       color: root.theme.surface
       border.color: root.theme.border
       border.width: 1
 
       Label {
-        id: tiredLabel
-        anchors.centerIn: parent
-        text: "Tired of this song"
-        color: tiredMouse.containsMouse ? root.theme.accent : root.theme.fg
+        id: songRadio
+        visible: false
+        text: "Start radio from this song"
+        font.pixelSize: Style.font.body
+      }
+      Label {
+        id: artistRadio
+        visible: false
+        text: "Start radio from " + root.player.artist
         font.pixelSize: Style.font.body
       }
 
-      MouseArea {
-        id: tiredMouse
-        anchors.fill: parent
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: {
-          root.moreOpen = false
-          root.player.tired()
+      Column {
+        id: moreColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.margins: Style.space(6)
+        anchors.verticalCenter: parent.verticalCenter
+
+        MoreItem {
+          label: songRadio.text
+          onPicked: root.player.radioFrom(root.player.trackId, root.player.title)
+        }
+        MoreItem {
+          visible: root.player.artistId !== ""
+          label: artistRadio.text
+          onPicked: root.player.radioFrom(root.player.artistId, root.player.artist)
+        }
+        MoreItem {
+          visible: root.player.canTire
+          label: "Tired of this song"
+          onPicked: root.player.tired()
         }
       }
     }

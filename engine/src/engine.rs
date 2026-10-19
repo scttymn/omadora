@@ -53,6 +53,7 @@ pub enum Cmd {
     ModeChanged,
     ListenHere,
     SignedOut,
+    StationRemoved(String),
     // From helper threads.
     SignedIn(Result<Arc<Pandora>, String>),
     Queued { generation: u64, source: String, name: String, tracks: Vec<Value>, track: Option<String>, index: Option<usize> },
@@ -350,6 +351,24 @@ impl Engine {
                     }
                 }
                 self.publish();
+            }
+            Cmd::StationRemoved(id) => {
+                // The station playing is gone: stop, and don't resume it.
+                if self.radio && self.source == id {
+                    self.generation += 1;
+                    self.stop_audio();
+                    self.clock.set(0.0, false);
+                    self.status = Status::Idle;
+                    self.radio = false;
+                    self.station = Value::Null;
+                    self.source.clear();
+                    self.source_name.clear();
+                    self.queue.clear();
+                    self.index = None;
+                    self.cache.clear();
+                    let _ = std::fs::remove_file(resume_path());
+                    self.publish();
+                }
             }
             Cmd::SignedOut => {
                 // The account is forgotten already; drop everything it played.

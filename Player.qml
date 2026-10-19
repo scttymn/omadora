@@ -113,6 +113,16 @@ QtObject {
     })
   }
 
+  // Remove a station from the account; done(ok, error).
+  function removeStation(id, done) {
+    engine.request("removeStation", { id: id }, function (ok, result) {
+      if (ok)
+        root.stations = result
+      if (done)
+        done(ok, ok ? "" : String(result))
+    })
+  }
+
   function stationNamed(name) {
     var wanted = String(name || "").toLowerCase()
     for (var i = 0; i < stations.length; i++) {
@@ -124,6 +134,16 @@ QtObject {
 
   function playStation(id, name) {
     engine.request("station", { id: id, name: name || "" })
+  }
+
+  // Radio from a song or artist: the listener's station for it if they
+  // have one, else a new one.
+  function radioFrom(seed, name) {
+    var existing = stationNamed(name + " Radio")
+    if (existing)
+      playStation(existing.id, existing.name)
+    else
+      createStation(seed)
   }
 
   // A station from an artist or song id. Pandora reuses one the listener

@@ -41,6 +41,7 @@ fn station(s: &Value) -> Value {
         "art": pick_art(&s["art"], 500),
         "thumbprint": s["isThumbprint"].as_bool().unwrap_or(false),
         "shuffle": s["isShuffle"].as_bool().unwrap_or(false),
+        "canRemove": s["allowDelete"].as_bool().unwrap_or(false),
         "lastPlayed": s["lastPlayed"],
         "seed": s["initialSeed"]["pandoraId"],
     })
@@ -51,6 +52,18 @@ pub fn stations(pandora: &Pandora) -> Result<Value> {
     let mut list: Vec<Value> = found["stations"].as_array().into_iter().flatten().map(station).collect();
     list.sort_by_key(|s| s["name"].as_str().unwrap_or_default().to_lowercase());
     Ok(json!(list))
+}
+
+/// Remove a station from the listener's account, and check it's gone:
+/// Pandora answers an unknown station with success, so its word alone
+/// proves nothing.
+pub fn remove_station(pandora: &Pandora, id: &str) -> Result<Value> {
+    pandora.call("v1/station/removeStation", json!({ "stationId": id }))?;
+    let left = stations(pandora)?;
+    if left.as_array().into_iter().flatten().any(|s| s["id"] == id) {
+        anyhow::bail!("Pandora didn't remove the station.");
+    }
+    Ok(left)
 }
 
 /// Shuffle plays across all stations; Pandora hands back a station for it.

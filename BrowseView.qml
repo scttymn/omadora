@@ -338,6 +338,7 @@ Item {
       anchors.right: parent.right
       anchors.rightMargin: Style.space(12)
       anchors.verticalCenter: parent.verticalCenter
+      visible: !rowHover.hovered || !trackRow.track.id
       text: trackRow.track.playable === false ? "Radio only" : root.formatTime(trackRow.track.duration)
       color: root.theme.muted
       font.pixelSize: Style.font.bodySmall
@@ -349,6 +350,25 @@ Item {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: trackRow.picked()
+    }
+
+    // Over the row: radio from this song, in place of its length.
+    HoverHandler {
+      id: rowHover
+    }
+
+    IconButton {
+      visible: rowHover.hovered && !!trackRow.track.id
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(6)
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(30)
+      theme: root.theme
+      icon: "󰀃"
+      iconSize: Style.font.body
+      fontFamily: root.fontFamily
+      enabled: !root.radioBusy
+      onActivated: root.startRadio(trackRow.track.id, trackRow.track.title)
     }
   }
 
