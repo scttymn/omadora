@@ -19,7 +19,7 @@ use crate::catalog;
 use crate::pandora::Pandora;
 use crate::radio::{self, Busy};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -54,6 +54,10 @@ pub enum Cmd {
     ListenHere,
     SignedOut,
     StationRemoved(String),
+    // The collection's ids, loaded after sign-in; and one song added or
+    // taken out.
+    CollectionLoaded(HashSet<String>),
+    Collected { id: String, add: bool },
     // From helper threads.
     SignedIn(Result<Arc<Pandora>, String>),
     Queued { generation: u64, source: String, name: String, tracks: Vec<Value>, track: Option<String>, index: Option<usize> },
@@ -208,6 +212,8 @@ struct Engine {
     cold: bool,
     // The next track, already queued in the audio to follow without a gap.
     queued_next: Option<usize>,
+    // What the listener has collected, so the thumbs show it outside radio.
+    collected: HashSet<String>,
     saved: String,
     last_save: Instant,
     clock: Clock,
@@ -249,6 +255,7 @@ pub fn start() -> anyhow::Result<Arc<Shared>> {
         restored: false,
         cold: false,
         queued_next: None,
+        collected: HashSet::new(),
         saved: String::new(),
         last_save: Instant::now(),
         clock: Clock::default(),
@@ -339,6 +346,7 @@ impl Engine {
                         if self.source.is_empty() && self.queue.is_empty() {
                             self.restore();
                         }
+                        self.background(|pandora| Ok(Some(Cmd::CollectionLoaded(crate::collection::ids(pandora)?))));
                     }
                     // Nothing to sign in with: wait for the widget's form.
                     Err(error) if error.contains(crate::pandora::NO_ACCOUNT) => {
@@ -389,7 +397,21 @@ impl Engine {
                 self.busy = false;
                 self.retry_sign_in = None;
                 self.needs_account = true;
-                let _ = std::fs::remove_file(resume_path());
+                self.collected.clear();
+                // The resume point stays, tagged with the account: the same
+                // account signing back in picks up where it left off.
+                self.publish();
+            }
+            Cmd::CollectionLoaded(ids) => {
+                self.collected = ids;
+                self.publish();
+            }
+            Cmd::Collected { id, add } => {
+                if add {
+                    self.collected.insert(id);
+                } else {
+                    self.collected.remove(&id);
+                }
                 self.publish();
             }
             Cmd::Play { source, track, index } => self.play(source, track, index),
@@ -1009,6 +1031,10 @@ impl Engine {
     /// first (a catalog lookup, not playback).
     fn restore(&mut self) {
         let Some(saved) = read_resume() else { return };
+        // Another account's: start fresh. (Older files have no owner.)
+        if saved["user"].as_str().is_some_and(|owner| Some(owner.to_string()) != crate::pandora::saved_user()) {
+            return;
+        }
         let track = saved["track"].clone();
         let source = saved["source"]["id"].as_str().unwrap_or_default().to_string();
         let name = saved["source"]["name"].as_str().unwrap_or_default().to_string();
@@ -1066,6 +1092,8 @@ impl Engine {
             "position": self.clock.at(),
             "history": self.history,
             "savedAt": now_ms() as u64,
+            // Whose it is: only the same account resumes it.
+            "user": crate::pandora::saved_user(),
         });
         write_resume(&state);
         self.saved = signature;
@@ -1074,7 +1102,10 @@ impl Engine {
 
     fn publish(&mut self) {
         let account = self.shared.pandora().map(|p| p.account());
-        let track = self.current().map(public).unwrap_or(Value::Null);
+        let mut track = self.current().map(public).unwrap_or(Value::Null);
+        if let Some(id) = track["id"].as_str().map(str::to_string) {
+            track["collected"] = json!(self.collected.contains(&id));
+        }
         let state = json!({
             "status": self.status.name(),
             "mode": if self.source.is_empty() { "" } else if self.radio { "radio" } else { "ondemand" },

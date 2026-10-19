@@ -136,7 +136,32 @@ Item {
     onTriggered: root.loadDiscover(false)
   }
 
-  onSideTabChanged: if (sideTab === "playlists") loadPlaylists()
+  // The collection's artists, read each time the tab opens: liking a song
+  // can add one.
+  property var artists: []
+  property bool artistsLoaded: false
+  property string artistsError: ""
+
+  function loadArtists() {
+    if (!root.engine.signedIn)
+      return
+    root.engine.request("collectionArtists", {}, function (ok, result) {
+      if (ok) {
+        root.artists = result
+        root.artistsError = ""
+      } else {
+        root.artistsError = String(result)
+      }
+      root.artistsLoaded = true
+    })
+  }
+
+  onSideTabChanged: {
+    if (sideTab === "playlists")
+      loadPlaylists()
+    else if (sideTab === "artists")
+      loadArtists()
+  }
   Connections {
     target: root.engine
     function onSignedInChanged() {
@@ -145,10 +170,15 @@ Item {
         root.playlists = []
         root.playlistsLoaded = false
         root.playlistsError = ""
+        root.artists = []
+        root.artistsLoaded = false
+        root.artistsError = ""
         return
       }
       if (root.sideTab === "playlists")
         root.loadPlaylists()
+      else if (root.sideTab === "artists")
+        root.loadArtists()
       if (root.section === "discover")
         root.loadDiscover(false)
     }
@@ -226,11 +256,12 @@ Item {
     onTriggered: root.askAi(false)
   }
 
-  // An agent chosen elsewhere (Omarchy's menu, settings.toml) shows up here.
+  // An agent chosen or changed elsewhere (Omarchy's menu, settings.toml)
+  // shows up here: soon while there is none, and every half minute after.
   Timer {
-    interval: 5000
+    interval: root.hasAgent ? 30000 : 5000
     repeat: true
-    running: root.aiOnScreen && !root.hasAgent
+    running: root.aiOnScreen
     onTriggered: root.loadAgents()
   }
 
@@ -754,7 +785,7 @@ Item {
         spacing: Style.space(18)
 
         Repeater {
-          model: [{ key: "stations", label: "Stations" }, { key: "playlists", label: "Playlists" }]
+          model: [{ key: "stations", label: "Stations" }, { key: "playlists", label: "Playlists" }, { key: "artists", label: "Artists" }]
           delegate: Caption {
             required property var modelData
             text: modelData.label
@@ -820,6 +851,66 @@ Item {
           if (!root.engine.signedIn)
             return "Signing in…"
           return root.playlistsLoaded ? "No playlists yet." : "Loading playlists…"
+        }
+        color: root.theme.muted
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      // Artists: the ones behind the collected albums and songs, as in
+      // Pandora's own My Collection.
+      ListView {
+        id: artistList
+        // Room at the end, clear of the bottom player.
+        bottomMargin: Style.space(20)
+        visible: root.sideTab === "artists" && count > 0
+        anchors.top: stationHeading.bottom
+        anchors.topMargin: Style.space(12)
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.leftMargin: Style.space(12)
+        anchors.rightMargin: Style.space(12)
+        clip: true
+        model: root.artists
+        boundsBehavior: Flickable.StopAtBounds
+
+        delegate: ResultRow {
+          required property var modelData
+          width: artistList.width
+          theme: root.theme
+          fontFamily: root.fontFamily
+          title: modelData.name || ""
+          subtitle: {
+            var parts = []
+            if (modelData.albums)
+              parts.push(modelData.albums + (modelData.albums === 1 ? " album" : " albums"))
+            if (modelData.songs)
+              parts.push(modelData.songs + (modelData.songs === 1 ? " song" : " songs"))
+            return parts.join(" · ")
+          }
+          artUrl: modelData.art || ""
+          swatch: modelData.color || root.theme.art
+          onPicked: root.showArtist(modelData.id, modelData.name)
+        }
+      }
+
+      Label {
+        visible: root.sideTab === "artists" && artistList.count === 0
+        anchors.top: stationHeading.bottom
+        anchors.topMargin: Style.space(16)
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.leftMargin: Style.space(20)
+        anchors.rightMargin: Style.space(20)
+        wrapMode: Text.WordWrap
+        text: {
+          if (root.artistsError !== "")
+            return root.artistsError
+          if (!root.engine.online)
+            return "Starting the player engine…"
+          if (!root.engine.signedIn)
+            return "Signing in…"
+          return root.artistsLoaded ? "Artists show up here as you add their albums and songs to your collection." : "Loading artists…"
         }
         color: root.theme.muted
         font.pixelSize: Style.font.bodySmall
@@ -1126,8 +1217,15 @@ Item {
               font.pixelSize: Style.font.caption
             }
             Caption {
-              visible: effortLink.visible
+              visible: effortLink.visible || effortText.visible
               text: "·"
+              font.pixelSize: Style.font.caption
+            }
+            // An effort the agent reports but offers no list for (Grok).
+            Caption {
+              id: effortText
+              visible: root.hasAgent && root.agentInfo.efforts.length === 0 && !!root.agentInfo.effort
+              text: (root.agentInfo && root.agentInfo.effort) || ""
               font.pixelSize: Style.font.caption
             }
             LinkLabel {
@@ -1582,9 +1680,9 @@ Item {
             iconSize: transport.glyph
             x: transport.step * 5
             anchors.verticalCenter: parent.verticalCenter
-            icon: root.player.rating === 1 ? "󰔓" : "󰔔"
-            active: root.player.rating === 1
-            enabled: root.player.canRate
+            icon: root.player.liked ? "󰔓" : "󰔔"
+            active: root.player.liked
+            enabled: root.player.canLike
             fontFamily: root.fontFamily
             onActivated: root.player.thumbUp()
           }

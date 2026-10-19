@@ -23,8 +23,8 @@
 //!
 //! Only the song playing is sent, never the listener's history. Agents run
 //! headless from a private, empty folder, with their tools turned off where
-//! the CLI can do that (Claude Code, Copilot, Pi, Oh My Pi); Codex runs in
-//! its read-only sandbox. Answers are kept per song, so asking again costs
+//! the CLI can do that (Claude Code, Copilot, Pi, Oh My Pi), Cursor in its
+//! read-only ask mode, and Codex in its read-only sandbox. Answers are kept per song, so asking again costs
 //! nothing.
 
 use crate::discover::{Lead, resolve};
@@ -45,9 +45,10 @@ const PICKS: usize = 8;
 
 /// Agents Omadora knows how to ask, with the names the tab shows. The same
 /// set Omarchy can make the default.
-pub const AGENTS: [(&str, &str); 10] = [
+pub const AGENTS: [(&str, &str); 11] = [
     ("claude", "Claude Code"),
     ("codex", "Codex"),
+    ("cursor-agent", "Cursor"),
     ("antigravity", "Antigravity"),
     ("gemini", "Gemini"),
     ("opencode", "OpenCode"),
@@ -104,8 +105,16 @@ fn choice() -> Option<Choice> {
     if ai_setting("command").is_some() {
         return Some(Choice { agent: "command".into(), from: "omadora" });
     }
-    // Antigravity's command is `agy`; either name means it.
-    let canonical = |a: String| if a == "agy" { "antigravity".to_string() } else { a };
+    // Antigravity's command is `agy`, and Cursor's is `cursor-agent` or
+    // `agent`; any of the names means it.
+    let canonical = |a: String| match a.as_str() {
+        "agy" => "antigravity".to_string(),
+        "cursor" | "agent" => "cursor-agent".to_string(),
+        // Antigravity replaces the Gemini CLI, and installs a `gemini` that
+        // runs it; Omarchy still calls it gemini.
+        "gemini" if gemini_is_antigravity() => "antigravity".to_string(),
+        _ => a,
+    };
     if let Some(agent) = ai_setting("agent") {
         return Some(Choice { agent: canonical(agent), from: "omadora" });
     }
@@ -232,8 +241,8 @@ fn opencode_offer() -> Offer {
 /// Antigravity lists its models (`agy models`: id, tab, name) and names its
 /// effort levels in its help.
 fn antigravity_offer() -> Offer {
-    let out = Command::new("agy").arg("models").stdin(Stdio::null()).output();
-    let models = out
+    let out = Command::new(antigravity_command()).arg("models").stdin(Stdio::null()).output();
+    let models: Vec<(String, String, Vec<String>)> = out
         .map(|o| {
             String::from_utf8_lossy(&o.stdout)
                 .lines()
@@ -243,12 +252,78 @@ fn antigravity_offer() -> Offer {
                 .collect()
         })
         .unwrap_or_default();
-    let efforts = option_block(&help_text("agy"), "--effort")
+    let efforts = option_block(&help_text(antigravity_command()), "--effort")
         .split_once('(')
         .and_then(|(_, rest)| rest.split_once(')'))
         .map(|(list, _)| list.split(['|', ',']).map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect())
         .unwrap_or_default();
-    Offer { models, efforts, ..Offer::default() }
+    // Its own default, saved by display name ("Gemini 3.8 Flash (High)").
+    let saved = read_json(home().join(".gemini").join("antigravity-cli").join("settings.json"));
+    let default_model = saved["model"].as_str().map(|name| {
+        models.iter().find(|(_, n, _)| n == name).map_or_else(|| name.to_string(), |(id, _, _)| id.clone())
+    });
+    Offer { models, efforts, default_model, ..Offer::default() }
+}
+
+/// Grok lists its models with `grok models` ("* id (default)", "- id");
+/// its defaults are in ~/.grok/config.toml. It names no effort levels, so
+/// there's no effort menu, only the current one.
+fn grok_offer() -> Offer {
+    let out = Command::new("grok").arg("models").stdin(Stdio::null()).output();
+    let listed = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let models = listed
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("* ").or_else(|| l.strip_prefix("- ")))
+        .filter_map(|l| l.split_whitespace().next())
+        .map(|id| (id.to_string(), id.to_string(), Vec::new()))
+        .collect();
+    let config: toml::Table = std::fs::read_to_string(home().join(".grok").join("config.toml")).ok().and_then(|t| t.parse().ok()).unwrap_or_default();
+    let setting = |key: &str| config.get("models").and_then(|m| m.get(key)).and_then(|v| v.as_str()).map(str::to_string);
+    Offer { models, efforts: Vec::new(), default_model: setting("default"), default_effort: setting("default_reasoning_effort") }
+}
+
+/// Whether `gemini` is Antigravity under its old name (its help says
+/// "Usage of agy"). Checked at most every ten minutes.
+fn gemini_is_antigravity() -> bool {
+    static SEEN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    if let Some((at, answer)) = *SEEN.lock().unwrap() {
+        if at.elapsed() < Duration::from_secs(600) {
+            return answer;
+        }
+    }
+    let answer = installed("gemini") && help_text("gemini").contains("Usage of agy");
+    *SEEN.lock().unwrap() = Some((Instant::now(), answer));
+    answer
+}
+
+/// Antigravity's command: `agy`, or the `gemini` it installs.
+fn antigravity_command() -> &'static str {
+    if installed("agy") { "agy" } else { "gemini" }
+}
+
+/// Cursor's command: `cursor-agent`, as Omarchy runs it, else the newer
+/// `agent`.
+fn cursor_command() -> &'static str {
+    if installed("cursor-agent") { "cursor-agent" } else { "agent" }
+}
+
+/// Cursor lists its models ("id - Name") with `--list-models`; the effort is
+/// part of each model ("gpt-5.3-codex-low"), so there's no effort menu. Its
+/// default is in ~/.config/cursor/cli-config.json.
+fn cursor_offer() -> Offer {
+    let out = Command::new(cursor_command()).arg("--list-models").stdin(Stdio::null()).output();
+    let listed = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let models = listed
+        .lines()
+        .filter_map(|l| l.split_once(" - "))
+        .map(|(id, name)| (id.trim().to_string(), name.trim().to_string(), Vec::new()))
+        .filter(|(id, _, _)| !id.is_empty() && !id.contains(' '))
+        .collect();
+    let base = std::env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home().join(".config"));
+    let config = read_json(base.join("cursor").join("cli-config.json"));
+    let default_model = config["model"]["displayName"].as_str().or(config["model"]["modelId"].as_str()).map(str::to_string);
+    Offer { models, default_model, ..Offer::default() }
 }
 
 /// An agent's offer, read at most every ten minutes.
@@ -264,6 +339,8 @@ fn offer(agent: &str) -> Offer {
         "claude" => claude_offer(),
         "opencode" => opencode_offer(),
         "antigravity" => antigravity_offer(),
+        "grok" => grok_offer(),
+        "cursor-agent" => cursor_offer(),
         _ => Offer::default(),
     };
     OFFERS.lock().unwrap().insert(agent.to_string(), (Instant::now(), fresh.clone()));
@@ -373,7 +450,14 @@ fn argv(agent: &str, answer: &std::path::Path, model: Option<&str>, effort: Opti
         "crush" => s(&["crush", "run"]),
         "grok" => s(&["grok", "--disable-web-search"]),
         // Takes the prompt only as an argument (see PROMPT_AS_ARGUMENT).
-        "antigravity" => s(&["agy"]),
+        "antigravity" => vec![antigravity_command().to_string()],
+        // Ask mode is read-only Q&A (print mode alone has every tool, shell
+        // included); --trust skips the prompt for its private empty folder.
+        "cursor-agent" => {
+            let mut a = s(&["-p", "--output-format", "text", "--mode", "ask", "--trust"]);
+            a.insert(0, cursor_command().to_string());
+            a
+        }
         "pi" => s(&["pi", "--no-tools"]),
         "omp" => s(&["omp", "--no-tools"]),
         _ => return None,
@@ -383,7 +467,7 @@ fn argv(agent: &str, answer: &std::path::Path, model: Option<&str>, effort: Opti
         "claude" | "antigravity" => (Some("--model"), Some("--effort")),
         "codex" => (Some("-m"), None),
         "grok" => (Some("-m"), Some("--reasoning-effort")),
-        "gemini" | "opencode" | "copilot" => (Some("--model"), None),
+        "gemini" | "opencode" | "copilot" | "cursor-agent" => (Some("--model"), None),
         _ => (None, None),
     };
     if let (Some(flag), Some(model)) = (model_flag, model) {
@@ -645,11 +729,14 @@ mod tests {
         let answer = std::path::Path::new("/run/user/1/omadora/answer.txt");
         for (id, _) in AGENTS {
             let args = argv(id, answer, Some("m1"), Some("low")).unwrap();
-            let command = if id == "antigravity" { "agy" } else { id };
-            assert_eq!(args[0], command);
+            match id {
+                "antigravity" => assert!(args[0] == "agy" || args[0] == "gemini"),
+                "cursor-agent" => assert!(args[0] == "cursor-agent" || args[0] == "agent"),
+                _ => assert_eq!(args[0], id),
+            }
         }
         let agy = argv("antigravity", answer, Some("gemini-3.8-flash-low"), Some("low")).unwrap();
-        assert_eq!(agy, ["agy", "--model", "gemini-3.8-flash-low", "--effort", "low", "--print"]);
+        assert_eq!(agy[1..], ["--model", "gemini-3.8-flash-low", "--effort", "low", "--print"]);
         let codex = argv("codex", answer, None, None).unwrap();
         assert_eq!(codex.last().unwrap(), "-");
         assert!(argv("muse", answer, None, None).is_none());

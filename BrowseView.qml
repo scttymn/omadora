@@ -657,6 +657,8 @@ Item {
         visible: active
         sourceComponent: Column {
           id: artistPage
+          readonly property var mineAlbums: (artistPage.artist.collected || {}).albums || []
+          readonly property var mineSongs: (artistPage.artist.collected || {}).songs || []
           width: parent ? parent.width : 0
           readonly property var artist: root.info
           readonly property var station: root.player.stationNamed(artist.name + " Radio")
@@ -694,6 +696,39 @@ Item {
                 enabled: !root.radioBusy
                 onActivated: root.startRadio(artistPage.artist.id, artistPage.artist.name)
               }
+            }
+          }
+
+          // What of theirs is in the listener's collection: why they're in
+          // the Artists tab.
+          Heading { visible: artistPage.mineAlbums.length + artistPage.mineSongs.length > 0; text: "In your collection" }
+
+          Flow {
+            width: parent.width
+            visible: artistPage.mineAlbums.length > 0
+            spacing: Style.space(18)
+
+            Repeater {
+              model: artistPage.mineAlbums
+              delegate: Tile {
+                required property var modelData
+                title: modelData.name
+                detail: modelData.year || ""
+                art: modelData.art
+                swatch: modelData.color || root.theme.art
+                onPicked: root.open({ kind: "album", id: modelData.id, name: modelData.name, artist: modelData.artist })
+              }
+            }
+          }
+
+          Repeater {
+            model: artistPage.mineSongs
+            delegate: TrackRow {
+              required property var modelData
+              track: modelData
+              showArt: true
+              detail: modelData.album
+              onPicked: root.playTrack(modelData)
             }
           }
 

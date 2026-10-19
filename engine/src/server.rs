@@ -18,6 +18,8 @@
 //!   station {id, name?}            play a station; id "shuffle" for Shuffle
 //!   createStation {seed}           make a station from an AR: or TR: id and play it
 //!   removeStation {id}             remove a station from the account; the stations left
+//!   collect {id, add}              add a song, album, or playlist to the collection, or take it out
+//!   collectionArtists              the artists of the collected albums and songs
 //!   thumbUp | thumbDown | tired    feedback on the radio track playing
 //!   listenHere                     take the account over from another device
 //!   signIn {user, password}        sign in, and save the account once Pandora accepts it
@@ -204,6 +206,18 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             Ok(discover::snapshot(pandora, request["refresh"].as_bool().unwrap_or(false)))
         }
+        "collect" => {
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
+            let id = arg(request, "id")?;
+            let add = request["add"].as_bool().ok_or_else(|| anyhow!("missing \"add\""))?;
+            crate::collection::set(&pandora, id, add)?;
+            shared.send(Cmd::Collected { id: id.to_string(), add });
+            Ok(json!({ "collected": add }))
+        }
+        "collectionArtists" => {
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
+            crate::collection::artists(&pandora)
+        }
         "removeStation" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             let id = arg(request, "id")?;
@@ -231,7 +245,13 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             match cmd {
                 "search" => catalog::search(&pandora, arg(request, "query")?),
-                "artist" => catalog::artist_page(&pandora, arg(request, "id")?),
+                "artist" => {
+                    let id = arg(request, "id")?;
+                    let mut page = catalog::artist_page(&pandora, id)?;
+                    // What of theirs is in the collection, for "In your collection".
+                    page["collected"] = crate::collection::for_artist(&pandora, id).unwrap_or_else(|_| json!({ "albums": [], "songs": [] }));
+                    Ok(page)
+                }
                 "album" => catalog::album_page(&pandora, arg(request, "id")?),
                 "playlist" => catalog::playlist_page(&pandora, arg(request, "id")?),
                 _ => catalog::playlists(&pandora),

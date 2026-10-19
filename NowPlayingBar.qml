@@ -121,9 +121,9 @@ Rectangle {
     IconButton {
       theme: root.theme
       anchors.verticalCenter: parent.verticalCenter
-      icon: root.player.rating === 1 ? "󰔓" : "󰔔"
-      active: root.player.rating === 1
-      enabled: root.player.canRate
+      icon: root.player.liked ? "󰔓" : "󰔔"
+      active: root.player.liked
+      enabled: root.player.canLike
       fontFamily: root.fontFamily
       onActivated: root.player.thumbUp()
     }

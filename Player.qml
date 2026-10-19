@@ -89,7 +89,16 @@ QtObject {
     if (canSeek)
       engine.seek(fraction * length)
   }
-  function thumbUp() { engine.request("thumbUp") }
+  // Thumbs up: on radio, feedback to the station; anywhere else, the song
+  // goes into (or comes out of) the listener's collection.
+  readonly property bool liked: isRadio ? rating === 1 : (track ? track.collected === true : false)
+  readonly property bool canLike: isRadio ? canRate : (trackId !== "" && engine.signedIn)
+  function thumbUp() {
+    if (isRadio)
+      engine.request("thumbUp")
+    else
+      engine.request("collect", { id: trackId, add: !liked })
+  }
   function thumbDown() { engine.request("thumbDown") }
   function tired() { engine.request("tired") }
 
