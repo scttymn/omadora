@@ -70,7 +70,7 @@ fn redirects() -> reqwest::redirect::Policy {
 }
 
 static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
+    crate::net::public_client()
         .user_agent(format!("{USER_AGENT} podcast player (+https://github.com/scttymn/omadora)"))
         .timeout(Duration::from_secs(30))
         .redirect(redirects())
@@ -80,7 +80,7 @@ static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
 
 // Episodes take as long as they take; only connecting is timed.
 static AUDIO_HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
+    crate::net::public_client()
         .user_agent(format!("{USER_AGENT} podcast player (+https://github.com/scttymn/omadora)"))
         .connect_timeout(Duration::from_secs(20))
         .timeout(None)

@@ -613,7 +613,7 @@ fn refresh(force: bool) {
             return;
         }
     }
-    let http = match reqwest::blocking::Client::builder()
+    let http = match crate::net::public_client()
         .user_agent(format!("{USER_AGENT} RSS reader (+https://github.com/scttymn/omadora)"))
         .timeout(Duration::from_secs(20))
         .build()
@@ -787,25 +787,18 @@ pub fn web_url(url: &str) -> bool {
     reqwest::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
 }
 
-/// A host on the internet, not this machine or the local network: a feed
-/// shouldn't be able to point the engine at a router or a local service.
-/// (Names are taken at their word; this doesn't resolve them.)
+/// A web address that may be fetched: not this machine or the local
+/// network by name, and, for an address written as an IP, a public one.
+/// (Names are checked again where they resolve: see `net`.)
 pub(crate) fn public_host(url: &str) -> bool {
-    use std::net::IpAddr;
     let Ok(u) = reqwest::Url::parse(url) else { return false };
     match u.host() {
         Some(url::Host::Domain(name)) => {
             let name = name.to_ascii_lowercase();
             !(name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") || name.ends_with(".internal"))
         }
-        Some(url::Host::Ipv4(ip)) => {
-            let ip = IpAddr::V4(ip);
-            !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || matches!(ip, IpAddr::V4(v4) if v4.is_private() || v4.is_link_local() || v4.is_broadcast() || v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64))
-        }
-        Some(url::Host::Ipv6(ip)) => {
-            let seg = ip.segments()[0];
-            !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || (seg & 0xfe00) == 0xfc00 || (seg & 0xffc0) == 0xfe80)
-        }
+        Some(url::Host::Ipv4(ip)) => crate::net::public_ip(ip.into()),
+        Some(url::Host::Ipv6(ip)) => crate::net::public_ip(ip.into()),
         None => false,
     }
 }
@@ -909,7 +902,7 @@ static IMAGE_HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
             attempt.follow()
         }
     });
-    reqwest::blocking::Client::builder()
+    crate::net::public_client()
         .user_agent(format!("{USER_AGENT} RSS reader (+https://github.com/scttymn/omadora)"))
         .timeout(Duration::from_secs(20))
         .redirect(policy)

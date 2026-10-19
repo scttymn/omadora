@@ -7,6 +7,7 @@ pub mod collection;
 pub mod discover;
 pub mod engine;
 pub mod files;
+pub mod net;
 pub mod pandora;
 pub mod podcasts;
 pub mod radio;
