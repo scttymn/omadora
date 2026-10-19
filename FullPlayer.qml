@@ -202,9 +202,12 @@ Item {
   property var aiErrors: ({})
   property string aiAsking: ""
   property var agentInfo: null
-  property bool choosingAgent: false
+  // The model or effort menu: { kind, options: [{ value, label }], at }.
+  property var aiMenu: null
   readonly property string aiTrack: root.player.trackId
-  readonly property var aiNow: ai[aiTrack] || null
+  // Answers are kept per song and per model and effort.
+  readonly property string aiKey: aiTrack === "" || !agentInfo ? "" : [aiTrack, agentInfo.agent, agentInfo.model || "", agentInfo.effort || ""].join("|")
+  readonly property var aiNow: ai[aiKey] || null
   readonly property bool aiOnScreen: shown && section === "music" && showQueue && queuePage === "ai"
   readonly property bool hasAgent: agentInfo !== null && !!agentInfo.agent
   readonly property string agentName: agentInfo && agentInfo.name ? agentInfo.name : "the agent"
@@ -215,7 +218,7 @@ Item {
       aiWait.restart()
     }
   }
-  onAiTrackChanged: if (aiOnScreen) aiWait.restart()
+  onAiKeyChanged: if (aiOnScreen) aiWait.restart()
 
   Timer {
     id: aiWait
@@ -243,42 +246,56 @@ Item {
   }
 
   function askAi(fresh) {
-    var id = aiTrack
-    if (!aiOnScreen || id === "" || !root.engine.signedIn || !hasAgent)
+    var key = aiKey
+    if (!aiOnScreen || key === "" || !root.engine.signedIn || !hasAgent)
       return
-    if (!fresh && ai[id])
+    if (!fresh && ai[key])
       return
-    if (aiAsking === id)
+    if (aiAsking === key)
       return
-    aiAsking = id
+    aiAsking = key
     var errors = Object.assign({}, aiErrors)
-    delete errors[id]
+    delete errors[key]
     aiErrors = errors
     root.engine.request("recommend", { fresh: fresh === true }, function (ok, result) {
-      if (root.aiAsking === id)
+      if (root.aiAsking === key)
         root.aiAsking = ""
       if (ok) {
         var answers = Object.assign({}, root.ai)
-        answers[result["for"].id] = result
+        answers[key] = result
         root.ai = answers
       } else {
         var failed = Object.assign({}, root.aiErrors)
-        failed[id] = String(result)
+        failed[key] = String(result)
         root.aiErrors = failed
       }
     })
   }
 
-  function chooseAgent(id) {
-    root.engine.request("setAgent", { agent: id }, function (ok, result) {
-      if (!ok)
-        return
-      root.agentInfo = result
-      root.choosingAgent = false
-      root.ai = ({})
-      root.aiErrors = ({})
-      aiWait.restart()
+  // Omadora's own model or effort for the agent (null: the agent's own).
+  // The default agent itself is never changed here.
+  function setAi(kind, value) {
+    var args = {}
+    args[kind] = value
+    root.aiMenu = null
+    root.engine.request("setAi", args, function (ok, result) {
+      if (ok)
+        root.agentInfo = result
     })
+  }
+
+  function openAiMenu(kind, label) {
+    var info = root.agentInfo
+    var options = []
+    var own = kind === "model" ? info.modelName : info.effort
+    options.push({ value: null, label: info.name + "'s own" + (own && !(kind === "model" ? info.modelChosen : info.effortChosen) ? " (" + own + ")" : "") })
+    var list = kind === "model" ? info.models : info.efforts
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i]
+      options.push(kind === "model" ? { value: item.id, label: item.name } : { value: item, label: item })
+    }
+    var current = kind === "model" ? (info.modelChosen ? info.model : null) : (info.effortChosen ? info.effort : null)
+    root.aiMenu = { kind: kind, options: options, current: current, at: label.mapToItem(root, 0, label.height) }
   }
 
   // A suggestion: play the song (or a station from it, when the plan can't
@@ -938,19 +955,20 @@ Item {
             return "signedOut"
           if (root.agentInfo === null)
             return "loading"
-          if (!root.hasAgent || root.choosingAgent)
-            return "choose"
+          if (!root.hasAgent)
+            return "noAgent"
           if (root.aiTrack === "")
             return "idle"
           if (root.aiNow)
             return "picks"
-          if (root.aiErrors[root.aiTrack])
+          if (root.aiErrors[root.aiKey])
             return "error"
           return "asking"
         }
 
-        // Which agent answers, and a way to ask again or pick another.
-        Row {
+        // Which agent answers, with which model and effort; each a menu
+        // when the agent lists its choices.
+        Flow {
           id: aiHeader
           visible: aiPanel.mode === "picks" || aiPanel.mode === "error" || aiPanel.mode === "asking" || aiPanel.mode === "idle"
           width: parent.width
@@ -961,13 +979,34 @@ Item {
             font.pixelSize: Style.font.caption
           }
           Caption {
+            visible: modelLink.visible || modelText.visible
             text: "·"
             font.pixelSize: Style.font.caption
           }
           LinkLabel {
-            text: "change"
+            id: modelLink
+            visible: root.hasAgent && root.agentInfo.models.length > 0
+            text: (root.agentInfo && root.agentInfo.modelName) || "default model"
             font.pixelSize: Style.font.caption
-            onClicked: root.choosingAgent = true
+            onClicked: root.openAiMenu("model", modelLink)
+          }
+          Caption {
+            id: modelText
+            visible: root.hasAgent && root.agentInfo.models.length === 0 && !!root.agentInfo.modelName
+            text: (root.agentInfo && root.agentInfo.modelName) || ""
+            font.pixelSize: Style.font.caption
+          }
+          Caption {
+            visible: effortLink.visible
+            text: "·"
+            font.pixelSize: Style.font.caption
+          }
+          LinkLabel {
+            id: effortLink
+            visible: root.hasAgent && root.agentInfo.efforts.length > 0
+            text: (root.agentInfo && root.agentInfo.effort) || "default effort"
+            font.pixelSize: Style.font.caption
+            onClicked: root.openAiMenu("effort", effortLink)
           }
           Caption {
             visible: aiPanel.mode === "picks"
@@ -984,7 +1023,7 @@ Item {
 
         // Status: signed out, thinking, nothing playing, or what went wrong.
         Column {
-          visible: aiPanel.mode !== "picks" && aiPanel.mode !== "choose"
+          visible: aiPanel.mode !== "picks" && aiPanel.mode !== "noAgent"
           anchors.top: aiHeader.visible ? aiHeader.bottom : parent.top
           anchors.topMargin: aiHeader.visible ? Style.space(16) : 0
           width: parent.width
@@ -1000,7 +1039,7 @@ Item {
               case "signedOut": return "Sign in, and an AI agent will suggest music like what's playing."
               case "loading": return ""
               case "idle": return "Play something, and " + root.agentName + " will suggest music like it."
-              case "error": return root.aiErrors[root.aiTrack] || ""
+              case "error": return root.aiErrors[root.aiKey] || ""
               default: return "Asking " + root.agentName + " for music like “" + root.player.title + "”…"
               }
             }
@@ -1014,9 +1053,9 @@ Item {
           }
         }
 
-        // No agent yet, or picking another: the supported ones installed here.
+        // No default agent: point to Omarchy's, which this tab only uses.
         Column {
-          visible: aiPanel.mode === "choose"
+          visible: aiPanel.mode === "noAgent"
           width: parent.width
           spacing: Style.space(12)
 
@@ -1025,65 +1064,13 @@ Item {
             wrapMode: Text.WordWrap
             color: root.theme.fg
             font.pixelSize: Style.font.bodySmall
-            text: root.hasAgent
-              ? "Choose the AI agent that suggests music."
-              : "Choose an AI agent to suggest music like what's playing. It asks only while this tab is open."
-          }
-
-          Flow {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Repeater {
-              model: root.agentInfo ? root.agentInfo.installed : []
-
-              delegate: Rectangle {
-                required property var modelData
-                readonly property bool current: root.agentInfo && root.agentInfo.agent === modelData.id
-                width: agentLabel.implicitWidth + Style.space(20)
-                height: Style.space(30)
-                radius: Style.cornerRadius
-                color: current ? root.theme.accent : (agentMouse.containsMouse ? root.theme.raised : root.theme.surface)
-
-                Label {
-                  id: agentLabel
-                  anchors.centerIn: parent
-                  text: modelData.name
-                  color: parent.current ? root.theme.accentText : root.theme.fg
-                  font.pixelSize: Style.font.bodySmall
-                }
-
-                MouseArea {
-                  id: agentMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.chooseAgent(modelData.id)
-                }
-              }
-            }
-          }
-
-          Label {
-            visible: root.agentInfo !== null && root.agentInfo.installed.length === 0
-            width: parent.width
-            wrapMode: Text.WordWrap
-            color: root.theme.muted
-            font.pixelSize: Style.font.bodySmall
-            text: "None of the agents Omadora can ask is installed."
+            text: "Set a default agent in Omarchy, and it will suggest music like what's playing while this tab is open."
           }
 
           LinkLabel {
-            text: "Set Omarchy's default agent"
+            text: "Set a default agent"
             font.pixelSize: Style.font.bodySmall
             onClicked: Quickshell.execDetached(["omarchy-menu", "summon", "setup.default.agent"])
-          }
-
-          LinkLabel {
-            visible: root.hasAgent
-            text: "Cancel"
-            font.pixelSize: Style.font.bodySmall
-            onClicked: root.choosingAgent = false
           }
         }
 
@@ -1577,6 +1564,63 @@ Item {
       anchors.fill: parent
       visible: root.moreOpen
       onClicked: root.moreOpen = false
+    }
+
+    // The AI tab's model or effort menu.
+    MouseArea {
+      anchors.fill: parent
+      visible: root.aiMenu !== null
+      onClicked: root.aiMenu = null
+    }
+
+    Rectangle {
+      visible: root.aiMenu !== null
+      x: root.aiMenu ? Math.max(Style.space(8), Math.min(parent.width - width - Style.space(8), root.aiMenu.at.x)) : 0
+      y: root.aiMenu ? root.aiMenu.at.y + Style.space(6) : 0
+      width: Style.space(240)
+      height: Math.min(aiMenuList.contentHeight + Style.space(12), parent.height - y - Style.space(12))
+      radius: Style.cornerRadius
+      color: root.theme.surface
+      border.color: root.theme.border
+      border.width: 1
+
+      ListView {
+        id: aiMenuList
+        anchors.fill: parent
+        anchors.margins: Style.space(6)
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.aiMenu ? root.aiMenu.options : []
+
+        delegate: Rectangle {
+          required property var modelData
+          readonly property bool selected: root.aiMenu !== null && root.aiMenu.current === modelData.value
+          width: aiMenuList.width
+          height: Style.space(32)
+          radius: Style.cornerRadius
+          color: optionMouse.containsMouse ? root.theme.raised : "transparent"
+
+          Label {
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(10)
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(10)
+            anchors.verticalCenter: parent.verticalCenter
+            text: modelData.label
+            color: parent.selected ? root.theme.accent : (optionMouse.containsMouse ? root.theme.strong : root.theme.fg)
+            font.pixelSize: Style.font.bodySmall
+            font.bold: parent.selected
+          }
+
+          MouseArea {
+            id: optionMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.setAi(root.aiMenu.kind, modelData.value)
+          }
+        }
+      }
     }
 
     // The account menu: who is signed in, and Sign out.

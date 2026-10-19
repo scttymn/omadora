@@ -59,20 +59,23 @@ match = "title"
 
 The AI tab, next to Up next and History, suggests songs and artists like the one playing. It asks an AI agent only while the tab is on screen, a few seconds after the song changes (so skipping through songs doesn't ask about each one), and keeps each song's answer. Every suggestion is checked against the catalog, preferring original recordings over remixes, so everything listed plays: click a song to play it (or start a station from it, when your plan can't play songs on demand), or an artist to open their page. What's playing and your recent songs and thumbs up go to the agent's provider.
 
-The agent is the one set in `~/.config/omadora/settings.toml`, else Omarchy's default agent (`omarchy default agent`). With neither, the tab offers the supported agents installed on this machine: Claude Code, Codex, Gemini, OpenCode, GitHub Copilot, Crush, Grok, Pi, and Oh My Pi. Each runs headless, with no tools.
+It uses Omarchy's default agent (`omarchy default agent`) and never changes it; with none set, the tab asks you to set one. Claude Code, Codex, Gemini, OpenCode, GitHub Copilot, Crush, Grok, Pi, and Oh My Pi work, each run headless with no tools. The tab's header names the agent, model, and effort: "From Codex · GPT-6-Astra · high · ask again". Model and effort are menus of what that agent offers, read from the agent itself so they stay current (Codex's model cache, with each model's efforts; Claude Code's own help; `opencode models`), and the choice is saved for Omadora alone. Agents that can't list their models show just their name.
+
+Everything is also in `~/.config/omadora/settings.toml`:
 
 ```toml
 [ai]
-agent = "claude"
 # What to suggest; Omadora adds what's playing and the answer's format.
 prompt = "Suggest 8 deep cuts from the same scene and decade, no hits."
-# A model for this, if not the agent's usual one (Claude Code, Codex, Grok,
-# Gemini, OpenCode, Copilot).
-model = "gpt-6-astra"
-# Reasoning effort (Claude Code, Codex, Grok). Omadora asks for low unless set.
-effort = "low"
+# An agent other than Omarchy's default, for Omadora only.
+# agent = "claude"
 # Or any command instead of an agent: the prompt on stdin, the answer on stdout.
 # command = "my-llm --json"
+
+[ai.codex]
+# What the tab's menus save; unset, the agent uses its own setting.
+model = "gpt-6-luna"
+effort = "low"
 ```
 
 ## Install

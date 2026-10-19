@@ -24,8 +24,8 @@
 //!   discover {refresh?}            magazine articles, matched to albums, songs, artists
 //!   image {url}                    an article's picture as a local file, cached
 //!   recommend {fresh?}             songs like the one playing, from the AI agent
-//!   agents                         the AI agent in use and the ones installed
-//!   setAgent {agent}               choose Omadora's own AI agent
+//!   agents                         the AI agent in use, its model and effort, and the choices
+//!   setAi {model?, effort?}        Omadora's model or effort for that agent (null: the agent's own)
 //!   modes {station}                a station's modes and which is on
 //!   setMode {station, mode}        switch it; the next song is in the new mode
 
@@ -190,7 +190,7 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
             crate::recommend::recommend(&pandora, &state, request["fresh"].as_bool().unwrap_or(false))
         }
         "agents" => Ok(crate::recommend::agents()),
-        "setAgent" => crate::recommend::set_agent(arg(request, "agent")?),
+        "setAi" => crate::recommend::set_ai(request),
         "image" => Ok(json!({ "path": discover::image(arg(request, "url")?)?.to_string_lossy() })),
         "discover" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;

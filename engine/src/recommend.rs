@@ -9,9 +9,15 @@
 //! agent = "claude"        # one of AGENTS; overrides Omarchy's default
 //! command = "my-llm"      # or any command: prompt on stdin, answer on stdout
 //! prompt = "Suggest deep cuts from the same scene and decade."
-//! model = "gpt-6-astra"   # passed to agents that take one
-//! effort = "low"          # the default; for agents with reasoning effort
+//!
+//! [ai.codex]              # per agent; the tab's model and effort menus
+//! model = "gpt-6-luna"
+//! effort = "low"
 //! ```
+//!
+//! Models and efforts come from each agent (Codex's model cache, Claude
+//! Code's help, `opencode models`), so they stay current. Unset, the agent
+//! uses its own setting.
 //!
 //! `prompt` replaces DEFAULT_PROMPT, the part that says what to suggest.
 //!
@@ -102,40 +108,207 @@ fn choice() -> Option<Choice> {
     Some(Choice { agent, from: "omarchy" })
 }
 
-/// The agent in use and the ones that could be: for the tab's picker.
+// ---- models and efforts, read from each agent so they stay current
+
+/// What an agent offers: its models (each with the efforts it takes) and
+/// its own defaults. Empty when the agent has no way to list them.
+#[derive(Clone, Default)]
+struct Offer {
+    models: Vec<(String, String, Vec<String>)>,
+    /// Efforts when they don't depend on the model.
+    efforts: Vec<String>,
+    default_model: Option<String>,
+    default_effort: Option<String>,
+}
+
+impl Offer {
+    fn efforts_for(&self, model: Option<&str>) -> Vec<String> {
+        model
+            .and_then(|m| self.models.iter().find(|(id, _, _)| id == m))
+            .map(|(_, _, e)| e.clone())
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| self.efforts.clone())
+    }
+}
+
+fn read_json(path: PathBuf) -> Value {
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null)
+}
+
+fn help_text(agent: &str) -> String {
+    Command::new(agent).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+}
+
+/// The lines describing one option in `--help` output.
+fn option_block(help: &str, flag: &str) -> String {
+    let mut lines = help.lines().skip_while(|l| !l.trim_start().starts_with(flag));
+    let mut block = lines.next().unwrap_or_default().to_string();
+    for line in lines {
+        if line.trim_start().starts_with('-') {
+            break;
+        }
+        block.push(' ');
+        block.push_str(line.trim());
+    }
+    block
+}
+
+/// Codex keeps the models a plan can use in its own cache, each with its
+/// reasoning efforts; config.toml has the listener's choice.
+fn codex_offer() -> Offer {
+    let dir = std::env::var("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|_| home().join(".codex"));
+    let cache = read_json(dir.join("models_cache.json"));
+    let models = cache["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m["visibility"] == "list")
+        .filter_map(|m| {
+            let id = m["slug"].as_str()?.to_string();
+            let name = m["display_name"].as_str().unwrap_or(&id).to_string();
+            let efforts = m["supported_reasoning_levels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e["effort"].as_str().or(e.as_str()).map(str::to_string))
+                .collect();
+            Some((id, name, efforts))
+        })
+        .collect();
+    let config: toml::Table = std::fs::read_to_string(dir.join("config.toml")).ok().and_then(|t| t.parse().ok()).unwrap_or_default();
+    let get = |k: &str| config.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let default_model = get("model");
+    let default_effort = get("model_reasoning_effort").or_else(|| {
+        let m = default_model.as_deref()?;
+        cache["models"].as_array()?.iter().find(|x| x["slug"] == m)?["default_reasoning_level"].as_str().map(str::to_string)
+    });
+    Offer { models, efforts: Vec::new(), default_model, default_effort }
+}
+
+/// Claude Code names its model aliases and effort levels in its own help,
+/// so they follow the installed version.
+fn claude_offer() -> Offer {
+    let help = help_text("claude");
+    let quoted = |text: &str| -> Vec<String> {
+        text.split('\'').skip(1).step_by(2).filter(|w| !w.is_empty() && !w.contains(' ')).map(str::to_string).collect()
+    };
+    let efforts: Vec<String> = option_block(&help, "--effort")
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(list, _)| list.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect())
+        .unwrap_or_default();
+    let models = quoted(&option_block(&help, "--model")).into_iter().map(|m| (m.clone(), m, Vec::new())).collect();
+    let settings = read_json(home().join(".claude").join("settings.json"));
+    Offer {
+        models,
+        efforts,
+        default_model: settings["model"].as_str().map(str::to_string),
+        default_effort: settings["effortLevel"].as_str().map(str::to_string),
+    }
+}
+
+/// OpenCode lists every model its providers offer.
+fn opencode_offer() -> Offer {
+    let out = Command::new("opencode").arg("models").stdin(Stdio::null()).output();
+    let models = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::trim).filter(|l| l.contains('/')).map(|l| (l.to_string(), l.to_string(), Vec::new())).collect())
+        .unwrap_or_default();
+    Offer { models, ..Offer::default() }
+}
+
+/// An agent's offer, read at most every ten minutes.
+fn offer(agent: &str) -> Offer {
+    static OFFERS: LazyLock<Mutex<HashMap<String, (Instant, Offer)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+    if let Some((at, o)) = OFFERS.lock().unwrap().get(agent) {
+        if at.elapsed() < Duration::from_secs(600) {
+            return o.clone();
+        }
+    }
+    let fresh = match agent {
+        "codex" => codex_offer(),
+        "claude" => claude_offer(),
+        "opencode" => opencode_offer(),
+        _ => Offer::default(),
+    };
+    OFFERS.lock().unwrap().insert(agent.to_string(), (Instant::now(), fresh.clone()));
+    fresh
+}
+
+/// Omadora's own choice of model or effort for an agent: `[ai.<agent>]`.
+fn agent_setting(agent: &str, key: &str) -> Option<String> {
+    settings()
+        .get("ai")
+        .and_then(|ai| ai.get(agent))
+        .and_then(|a| a.get(key))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// The model and effort to pass: Omadora's choice, if the agent still
+/// offers it. None leaves it to the agent's own setting.
+fn chosen(agent: &str, offer: &Offer) -> (Option<String>, Option<String>) {
+    let model = ident(agent_setting(agent, "model")).filter(|m| offer.models.is_empty() || offer.models.iter().any(|(id, _, _)| id == m));
+    let efforts = offer.efforts_for(model.as_deref().or(offer.default_model.as_deref()));
+    let effort = ident(agent_setting(agent, "effort")).filter(|e| efforts.is_empty() || efforts.contains(e));
+    (model, effort)
+}
+
+/// The agent in use, its model and effort, and the choices for each.
 pub fn agents() -> Value {
-    let current = choice();
+    let Some(current) = choice() else { return json!({ "agent": null }) };
+    let name = if current.agent == "command" { "your command".to_string() } else { display_name(&current.agent) };
+    let offer = offer(&current.agent);
+    let (model, effort) = chosen(&current.agent, &offer);
+    let model_now = model.clone().or(offer.default_model.clone());
+    let model_name = model_now.as_ref().map(|m| offer.models.iter().find(|(id, _, _)| id == m).map_or(m.clone(), |(_, n, _)| n.clone()));
     json!({
-        "agent": current.as_ref().map(|c| c.agent.clone()),
-        "name": current.as_ref().map(|c| if c.agent == "command" { "your command".to_string() } else { display_name(&c.agent) }),
-        "from": current.as_ref().map(|c| c.from),
-        "installed": AGENTS
-            .iter()
-            .filter(|(id, _)| installed(id))
-            .map(|(id, name)| json!({ "id": id, "name": name }))
-            .collect::<Vec<_>>(),
+        "agent": current.agent,
+        "name": name,
+        "from": current.from,
+        "model": model_now,
+        "modelName": model_name,
+        "modelChosen": model.is_some(),
+        "effort": effort.clone().or(offer.default_effort.clone()),
+        "effortChosen": effort.is_some(),
+        "models": offer.models.iter().map(|(id, name, _)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),
+        "efforts": offer.efforts_for(model_now.as_deref()),
     })
 }
 
-/// Save Omadora's own agent, keeping the rest of the settings file.
-pub fn set_agent(agent: &str) -> Result<Value> {
-    if !AGENTS.iter().any(|(id, _)| *id == agent) {
-        bail!("Omadora doesn't know how to ask {agent}.");
-    }
+/// Save Omadora's model or effort for the agent in use (`null` goes back
+/// to the agent's own). The default agent itself is never changed.
+pub fn set_ai(request: &Value) -> Result<Value> {
+    let Some(current) = choice() else { bail!("No agent is set.") };
+    let offer = offer(&current.agent);
     let mut all = settings();
     let ai = all.entry("ai").or_insert_with(|| toml::Value::Table(toml::Table::new()));
     let toml::Value::Table(ai) = ai else { bail!("[ai] in {} is not a table", settings_path().display()) };
-    ai.insert("agent".into(), toml::Value::String(agent.into()));
+    let mine = ai.entry(current.agent.clone()).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let toml::Value::Table(mine) = mine else { bail!("[ai.{}] is not a table", current.agent) };
+    for key in ["model", "effort"] {
+        match &request[key] {
+            Value::Null if request.get(key).is_some() => {
+                mine.remove(key);
+            }
+            Value::String(v) => {
+                let v = ident(Some(v.clone())).ok_or_else(|| anyhow!("That {key} name isn't valid."))?;
+                mine.insert(key.into(), toml::Value::String(v));
+            }
+            _ => {}
+        }
+    }
+    // A new model may not take the effort chosen for the old one.
+    let model = mine.get("model").and_then(|v| v.as_str()).map(str::to_string).or(offer.default_model.clone());
+    let efforts = offer.efforts_for(model.as_deref());
+    if mine.get("effort").and_then(|v| v.as_str()).is_some_and(|e| !efforts.is_empty() && !efforts.iter().any(|x| x == e)) {
+        mine.remove("effort");
+    }
     let path = settings_path();
     std::fs::create_dir_all(path.parent().unwrap())?;
     std::fs::write(&path, toml::to_string(&all)?).with_context(|| format!("writing {}", path.display()))?;
-    CACHE.lock().unwrap().clear();
     Ok(agents())
 }
-
-/// Effort when `[ai] effort` is unset: song suggestions don't need an
-/// agent's deepest reasoning, and low is faster and lighter on a plan.
-const DEFAULT_EFFORT: &str = "low";
 
 /// A model or effort name from settings, passed as one argument. Anything
 /// that could read as a flag or carry junk is dropped.
@@ -296,12 +469,15 @@ pub fn recommend(pandora: &Pandora, state: &Value, fresh: bool) -> Result<Value>
     let track = &state["track"];
     let key = track["id"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("Nothing is playing."))?.to_string();
     let _turn = ASKING.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(choice) = choice() else { bail!("No agent is set.") };
+    // One answer per song and per agent, model, and effort.
+    let (model, effort) = chosen(&choice.agent, &offer(&choice.agent));
+    let cache_key = format!("{key}|{}|{}|{}", choice.agent, model.unwrap_or_default(), effort.unwrap_or_default());
     if !fresh {
-        if let Some(found) = CACHE.lock().unwrap().get(&key) {
+        if let Some(found) = CACHE.lock().unwrap().get(&cache_key) {
             return Ok(found.clone());
         }
     }
-    let Some(choice) = choice() else { bail!("No agent is set.") };
     let name = if choice.agent == "command" { "your command".to_string() } else { display_name(&choice.agent) };
     let question = prompt(state);
     let answer_file = std::env::temp_dir().join(format!("omadora-answer-{}.txt", std::process::id()));
@@ -311,8 +487,7 @@ pub fn recommend(pandora: &Pandora, state: &Value, fresh: bool) -> Result<Value>
         c.arg("-c").arg(command);
         run(c, Some(&question))?
     } else {
-        let model = ident(ai_setting("model"));
-        let effort = ident(ai_setting("effort")).or_else(|| Some(DEFAULT_EFFORT.to_string()));
+        let (model, effort) = chosen(&choice.agent, &offer(&choice.agent));
         let args = argv(&choice.agent, &question, &answer_file, model.as_deref(), effort.as_deref()).ok_or_else(|| anyhow!("Omadora doesn't know how to ask {name} yet."))?;
         if !installed(&args[0]) {
             bail!("{name} isn't installed.");
@@ -361,7 +536,7 @@ pub fn recommend(pandora: &Pandora, state: &Value, fresh: bool) -> Result<Value>
         "picks": found,
         "missing": picks.len().saturating_sub(found.len()),
     });
-    CACHE.lock().unwrap().insert(key, result.clone());
+    CACHE.lock().unwrap().insert(cache_key, result.clone());
     Ok(result)
 }
 
@@ -375,6 +550,14 @@ mod tests {
         let p = prompt(&state);
         assert!(p.contains("\"Shout\" by Tears For Fears"));
         assert!(p.contains("\"picks\""));
+    }
+
+    #[test]
+    fn help_text_gives_an_options_description() {
+        let help = "  --effort <level>     Effort level for the current session\n                       (low, medium, high)\n  --model <model>      Model; an alias ('fable', 'opus') or a full name.\n  -n, --name <name>    Name\n";
+        assert!(option_block(help, "--effort").contains("(low, medium, high)"));
+        assert!(option_block(help, "--model").contains("'fable', 'opus'"));
+        assert!(!option_block(help, "--model").contains("Name"));
     }
 
     #[test]
