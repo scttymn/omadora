@@ -3,86 +3,86 @@ import Quickshell
 import qs.Ui
 import qs.Commons
 
-// What you see of Omadora. The site is a separate Chrome window.
+// What you see of Omadora. omadora-engine plays Pandora, radio and on
+// demand alike; this widget is the player.
 BarWidget {
   id: root
   moduleName: "scttymn.omadora"
 
-  Service {
-    id: pandora
+  Engine {
+    id: engine
   }
 
-  readonly property bool hasTrack: pandora.title !== "" || pandora.artist !== ""
-  readonly property string label: {
-    if (pandora.title && pandora.artist)
-      return pandora.title + "  ·  " + pandora.artist
-    if (pandora.title)
-      return pandora.title
-    if (pandora.artist)
-      return pandora.artist
-    return pandora.hasPlayer ? "Pandora" : "Omadora"
+  Player {
+    id: player
+    engine: engine
   }
-  readonly property string playIcon: pandora.playing ? "󰏤" : "󰐊"
+
+  readonly property string label: {
+    if (player.title && player.artist)
+      return player.title + " · " + player.artist
+    return player.title || player.artist || "Pandora"
+  }
+
+  Theme {
+    id: theme
+  }
 
   property bool popupOpen: false
 
-  function close() { popupOpen = false }
-
-  implicitWidth: row.implicitWidth + Style.space(14)
-  implicitHeight: barSize
-
-  Row {
-    id: row
-    anchors.centerIn: parent
-    spacing: Style.space(6)
-
-    Text {
-      textFormat: Text.PlainText
-      anchors.verticalCenter: parent.verticalCenter
-      text: root.playIcon
-      color: pandora.playing ? root.bar.barForeground : Qt.darker(root.bar.barForeground, 1.5)
-      font.family: root.bar.fontFamily
-      font.pixelSize: Style.font.body
-    }
-
-    Text {
-      textFormat: Text.PlainText
-      anchors.verticalCenter: parent.verticalCenter
-      text: root.label
-      color: root.bar.barForeground
-      font.family: root.bar.fontFamily
-      font.pixelSize: Style.font.body
-      elide: Text.ElideRight
-      width: Math.min(implicitWidth, Style.space(160))
-      visible: !root.bar.vertical
-    }
+  function close() {
+    popupOpen = false
   }
 
-  MouseArea {
-    anchors.fill: parent
-    hoverEnabled: true
-    cursorShape: Qt.PointingHandCursor
-    acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+  // The full player is a regular window, so Hyprland tiles, focuses, and
+  // closes it like any other app.
+  function expand() {
+    popupOpen = false
+    playerWindow.visible = true
+  }
 
-    onClicked: function(mouse) {
-      if (mouse.button === Qt.MiddleButton) {
-        pandora.next()
-      } else if (mouse.button === Qt.RightButton) {
-        root.popupOpen = !root.popupOpen
-      } else if (!pandora.hasPlayer) {
-        pandora.engine("launch")
-      } else {
-        pandora.playPause()
+  function shrink() {
+    playerWindow.visible = false
+    popupOpen = true
+  }
+
+  // The bar's own click layer calls triggerPress on a registered WidgetButton.
+  // A MouseArea underneath that layer never sees the left click.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
+  WidgetButton {
+    id: button
+    anchors.fill: parent
+    bar: root.bar
+    labelVisible: false
+    hasVisualContent: true
+    tooltipText: root.label
+    fixedWidth: button.vertical ? -1 : logo.implicitWidth + button.scaledHorizontalMargin * 2
+
+    PandoraLogo {
+      id: logo
+      anchors.centerIn: parent
+      // Glyph icons ink about 85% of their font size; match the neighbors.
+      logoHeight: Math.round(Style.font.body * 0.85)
+      color: button.foreground
+      opacity: player.hasPlayer ? 1 : 0.6
+    }
+
+    onPressed: function(b) {
+      if (b === Qt.MiddleButton) {
+        player.next()
+        return
       }
+      if (b !== Qt.LeftButton)
+        return
+      root.popupOpen = !root.popupOpen
     }
-    onWheel: function(wheel) {
-      if (wheel.angleDelta.y > 0)
-        pandora.previous()
-      else if (wheel.angleDelta.y < 0)
-        pandora.next()
+
+    onWheelMoved: function(delta) {
+      if (delta < 0)
+        player.next()
     }
-    onEntered: if (root.bar) root.bar.showTooltip(root, root.label)
-    onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 
   PopupCard {
@@ -91,75 +91,55 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    contentWidth: popup.fittedContentWidth(Style.space(280))
-    contentHeight: popup.fittedContentHeight(column.implicitHeight)
+    padding: 0
+    contentWidth: popup.fittedContentWidth(Style.space(380))
+    contentHeight: popup.cappedContentHeight(Style.space(280))
 
-    Column {
-      id: column
+    MiniPlayer {
       anchors.fill: parent
-      spacing: Style.space(10)
-
-      Text {
-        textFormat: Text.PlainText
-        width: parent.width
-        text: pandora.title || "Pandora"
-        color: root.bar.foreground
-        font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.body
-        elide: Text.ElideRight
+      player: player
+      theme: theme
+      fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+      onExpandRequested: root.expand()
+      onCloseRequested: root.close()
+      onArtistRequested: {
+        root.expand()
+        fullPlayer.showArtist(player.artistId, player.artist)
       }
-
-      Text {
-        textFormat: Text.PlainText
-        width: parent.width
-        text: pandora.artist
-        color: Qt.darker(root.bar.foreground, 1.6)
-        font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
-        visible: text !== ""
+      onAlbumRequested: {
+        root.expand()
+        fullPlayer.showAlbum(player.albumId, player.album, player.artist)
       }
+    }
+  }
 
-      Row {
-        anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(6)
+  // Modes belong to a station, so fetch them again when it changes.
+  Connections {
+    target: player
+    function onSourceIdChanged() {
+      if (playerWindow.visible)
+        Qt.callLater(player.refreshModes)
+    }
+  }
 
-        Button {
-          iconText: "󰒮"
-          foreground: root.bar.foreground
-          enabled: pandora.player && pandora.player.canGoPrevious
-          opacity: enabled ? 1 : 0.4
-          onClicked: pandora.previous()
-        }
+  FloatingWindow {
+    id: playerWindow
+    visible: false
+    title: "Omadora"
+    color: theme.bg
+    implicitWidth: Style.space(1100)
+    implicitHeight: Style.space(700)
+    minimumSize: Qt.size(Style.space(720), Style.space(520))
+    onVisibleChanged: if (visible) player.refreshModes()
 
-        Button {
-          iconText: root.playIcon
-          foreground: root.bar.foreground
-          enabled: pandora.hasPlayer
-          opacity: enabled ? 1 : 0.4
-          onClicked: pandora.playPause()
-        }
-
-        Button {
-          iconText: "󰒭"
-          foreground: root.bar.foreground
-          enabled: pandora.player && pandora.player.canGoNext
-          opacity: enabled ? 1 : 0.4
-          onClicked: pandora.next()
-        }
-      }
-
-      Button {
-        text: "Show Pandora"
-        foreground: root.bar.foreground
-        onClicked: pandora.engine("show")
-      }
-
-      Button {
-        text: "Hide the site"
-        foreground: root.bar.foreground
-        onClicked: pandora.engine("hide")
-      }
+    FullPlayer {
+      id: fullPlayer
+      anchors.fill: parent
+      engine: engine
+      player: player
+      theme: theme
+      fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+      onShrinkRequested: root.shrink()
     }
   }
 }
