@@ -30,6 +30,13 @@ Pandora's message. `listenHere` takes over with `playbackResumed`
 `$XDG_RUNTIME_DIR/omadora/session.json` (mode 600, gone at reboot) so a
 restarted engine is the same device.
 
+Where the listener was (source, song, position, radio history) is saved to
+`$XDG_STATE_HOME/omadora/resume.json` (mode 600) as it changes and every few
+seconds while playing. On start the engine restores it paused, without any
+playback request, so it never takes the stream from another device; play
+fetches the song and seeks to the saved spot. A radio song whose audio link
+has expired starts its station fresh instead.
+
 Radio comes as HE-AAC, decoded with ffmpeg (no Rust decoder reconstructs
 its high band); on-demand MP3 decodes in-process.
 

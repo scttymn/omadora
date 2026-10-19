@@ -4,6 +4,11 @@
 //! playlist, or song, fixed up front. On radio, it is a station's tracks,
 //! fetched a few at a time and topped up as they play.
 //!
+//! Where the listener was (source, song, position) is saved as it changes
+//! and restored, paused, when the engine starts again. A restore makes no
+//! playback requests until play is pressed, so it never takes the account's
+//! one stream from another device.
+//!
 //! One thread owns all of it and takes `Cmd`s off a channel. Network work
 //! (sign-in, track lists, audio downloads) runs on helper threads that send
 //! their results back as commands, tagged with a generation so results for
@@ -56,6 +61,7 @@ pub enum Cmd {
     Loaded { generation: u64, index: usize, result: Result<Loaded, String> },
     Busy { generation: u64, message: String },
     Prefetched { key: String, loaded: Loaded },
+    Restored { generation: u64, source: String, name: String, tracks: Vec<Value>, track: String, position: f64 },
     Rated { token: String, rating: i64 },
     Failed(String),
 }
@@ -184,6 +190,17 @@ struct Engine {
     error: String,
     // Another device holds the account; "listen here" takes it over.
     busy: bool,
+    // The current song's audio is loaded. A restored session shows the song
+    // paused before any audio is fetched.
+    audio_ready: bool,
+    // Where to start the next song that loads, for resuming a restore.
+    resume_at: Option<f64>,
+    restored: bool,
+    // A restored station has not started this session; its first fetch
+    // must say so.
+    cold: bool,
+    saved: String,
+    last_save: Instant,
     clock: Clock,
     last_publish: Instant,
 }
@@ -217,6 +234,12 @@ pub fn start() -> anyhow::Result<Arc<Shared>> {
         cache: HashMap::new(),
         error: String::new(),
         busy: false,
+        audio_ready: false,
+        resume_at: None,
+        restored: false,
+        cold: false,
+        saved: String::new(),
+        last_save: Instant::now(),
         clock: Clock::default(),
         last_publish: Instant::now(),
     };
@@ -241,6 +264,9 @@ impl Engine {
     fn tick(&mut self) {
         if self.status == Status::Playing && self.audio.finished() {
             self.advance(1, false);
+        }
+        if self.status == Status::Playing {
+            self.save();
         }
         if self.retry_sign_in.is_some_and(|at| Instant::now() >= at) {
             self.sign_in();
@@ -286,6 +312,9 @@ impl Engine {
                     Ok(pandora) => {
                         *self.shared.pandora.write().unwrap() = Some(pandora);
                         self.error.clear();
+                        if self.source.is_empty() && self.queue.is_empty() {
+                            self.restore();
+                        }
                     }
                     Err(error) => {
                         self.error = error;
@@ -323,6 +352,8 @@ impl Engine {
                     return;
                 }
                 self.radio = true;
+                self.cold = false;
+                self.restored = false;
                 self.source = station["id"].as_str().unwrap_or_default().to_string();
                 self.source_name = station["name"].as_str().unwrap_or_default().to_string();
                 self.station = station;
@@ -344,6 +375,7 @@ impl Engine {
                 self.fetching = false;
                 match result {
                     Ok(tracks) => {
+                        self.cold = false;
                         self.queue.extend(tracks);
                         if self.waiting_for_more {
                             self.waiting_for_more = false;
@@ -359,7 +391,7 @@ impl Engine {
                         if busy {
                             // Someone else took the account: stop, like the apps do.
                             self.generation += 1;
-                            self.audio.stop();
+                            self.stop_audio();
                             self.clock.set(0.0, false);
                             self.status = Status::Idle;
                             self.busy = true;
@@ -371,7 +403,7 @@ impl Engine {
             }
             Cmd::Busy { generation, message } => {
                 if generation == self.generation {
-                    self.audio.stop();
+                    self.stop_audio();
                     self.clock.set(0.0, false);
                     self.status = Status::Idle;
                     self.busy = true;
@@ -404,10 +436,33 @@ impl Engine {
                 match result {
                     Ok(loaded) => self.begin(index, loaded),
                     Err(error) => {
+                        if self.restored && self.radio {
+                            // The saved song's audio link has expired; start
+                            // the station fresh rather than show an error.
+                            self.restored = false;
+                            self.resume_at = None;
+                            let (id, name) = (self.source.clone(), self.source_name.clone());
+                            self.start_station(id, name, None);
+                            return;
+                        }
                         self.status = Status::Idle;
                         self.fail(error);
                     }
                 }
+            }
+            Cmd::Restored { generation, source, name, tracks, track, position } => {
+                // Dropped if the listener started something meanwhile.
+                if generation != self.generation || !self.source.is_empty() || tracks.is_empty() {
+                    return;
+                }
+                let found = tracks.iter().position(|t| t["id"] == track.as_str());
+                self.radio = false;
+                self.station = Value::Null;
+                self.source = source;
+                self.source_name = name;
+                self.queue = tracks;
+                self.index = Some(found.unwrap_or(0));
+                self.show_restored(if found.is_some() { position } else { 0.0 });
             }
             Cmd::Prefetched { key, loaded } => {
                 self.cache.insert(key, loaded);
@@ -474,7 +529,7 @@ impl Engine {
             }
             Cmd::Stop => {
                 self.generation += 1;
-                self.audio.stop();
+                self.stop_audio();
                 self.clock.set(0.0, false);
                 self.status = Status::Idle;
                 self.publish();
@@ -619,7 +674,7 @@ impl Engine {
     }
 
     fn begin_loading(&mut self) {
-        self.audio.stop();
+        self.stop_audio();
         self.clock.set(0.0, false);
         self.status = Status::Loading;
         self.error.clear();
@@ -632,9 +687,9 @@ impl Engine {
         }
         let Some(pandora) = self.shared.pandora() else { return };
         self.fetching = true;
-        let (tx, generation, sid) = (self.tx.clone(), self.generation, self.source.clone());
+        let (tx, generation, sid, starting) = (self.tx.clone(), self.generation, self.source.clone(), self.cold);
         std::thread::spawn(move || {
-            let result = radio::fragment(&pandora, &sid, false).map_err(|e| {
+            let result = radio::fragment(&pandora, &sid, starting).map_err(|e| {
                 let busy = e.downcast_ref::<Busy>().is_some();
                 (format!("{e:#}"), busy)
             });
@@ -653,7 +708,7 @@ impl Engine {
             return;
         }
         let Some(pandora) = self.pandora() else { return };
-        self.audio.stop();
+        self.stop_audio();
         self.clock.set(0.0, false);
         self.status = Status::Loading;
         self.publish();
@@ -670,8 +725,15 @@ impl Engine {
             self.fail(format!("{e:#}"));
             return;
         }
+        self.audio_ready = true;
+        self.restored = false;
+        // Resuming a restored session picks up where it left off.
+        let start = self.resume_at.take().unwrap_or(0.0);
+        if start > 0.0 {
+            let _ = self.audio.seek(Duration::from_secs_f64(start));
+        }
         self.audio.play();
-        self.clock.set(0.0, true);
+        self.clock.set(start, true);
         self.status = Status::Playing;
         self.index = Some(index);
         // Report the play the way Pandora's own apps do.
@@ -751,7 +813,7 @@ impl Engine {
             // Out of fetched tracks: wait for the next few.
             self.waiting_for_more = true;
             self.fetch_more();
-            self.audio.stop();
+            self.stop_audio();
             self.clock.set(0.0, false);
             self.status = Status::Loading;
             self.publish();
@@ -759,7 +821,7 @@ impl Engine {
         }
         // End of the album or playlist.
         if !by_listener || step > 0 {
-            self.audio.stop();
+            self.stop_audio();
             self.clock.set(0.0, false);
             self.status = Status::Idle;
             self.index = Some(0);
@@ -783,6 +845,15 @@ impl Engine {
     }
 
     fn resume(&mut self) {
+        // A restored session has no audio yet: fetch it now, from the spot
+        // it was left at.
+        if self.status == Status::Paused && !self.audio_ready {
+            if let Some(i) = self.index {
+                self.resume_at = Some(self.clock.at());
+                self.load(i);
+            }
+            return;
+        }
         if self.status == Status::Paused {
             self.audio.play();
             self.clock.run();
@@ -808,12 +879,91 @@ impl Engine {
         if matches!(self.status, Status::Playing | Status::Paused) {
             let length = self.current().and_then(|t| t["duration"].as_f64());
             let target = seconds.clamp(0.0, length.unwrap_or(f64::MAX));
+            if !self.audio_ready {
+                // Restored and not yet loaded: just move where it will start.
+                self.clock.set(target, false);
+                self.publish();
+                return;
+            }
             match self.audio.seek(Duration::from_secs_f64(target)) {
                 Ok(()) => self.clock.set(target, self.status == Status::Playing),
                 Err(e) => self.error = format!("{e:#}"),
             }
             self.publish();
         }
+    }
+
+    fn stop_audio(&mut self) {
+        self.audio.stop();
+        self.audio_ready = false;
+    }
+
+    /// Put back what was playing when the engine last ran, paused. Radio
+    /// comes back at once; an album or playlist re-reads its track list
+    /// first (a catalog lookup, not playback).
+    fn restore(&mut self) {
+        let Some(saved) = read_resume() else { return };
+        let track = saved["track"].clone();
+        let source = saved["source"]["id"].as_str().unwrap_or_default().to_string();
+        let name = saved["source"]["name"].as_str().unwrap_or_default().to_string();
+        if track.is_null() || source.is_empty() {
+            return;
+        }
+        let position = saved["position"].as_f64().unwrap_or(0.0);
+        self.history = saved["history"].as_array().cloned().unwrap_or_default();
+        if saved["mode"] == "radio" {
+            self.radio = true;
+            self.cold = true;
+            self.station = saved["station"].clone();
+            self.source = source;
+            self.source_name = name;
+            self.queue = vec![track];
+            self.index = Some(0);
+            self.show_restored(position);
+            return;
+        }
+        let Some(pandora) = self.shared.pandora() else { return };
+        self.generation += 1;
+        let (tx, generation) = (self.tx.clone(), self.generation);
+        let track = track["id"].as_str().unwrap_or_default().to_string();
+        std::thread::spawn(move || {
+            if let Ok((name, tracks)) = catalog::tracks_for(&pandora, &source) {
+                let _ = tx.send(Cmd::Restored { generation, source, name, tracks, track, position });
+            }
+        });
+    }
+
+    fn show_restored(&mut self, position: f64) {
+        let length = self.current().and_then(|t| t["duration"].as_f64()).unwrap_or(f64::MAX);
+        self.audio_ready = false;
+        self.restored = true;
+        self.status = Status::Paused;
+        self.clock.set(position.clamp(0.0, length), false);
+        self.publish();
+    }
+
+    /// Remember where the listener is: on a new song, source, or status, and
+    /// every few seconds while playing.
+    fn save(&mut self) {
+        let Some(track) = self.current() else { return };
+        let signature = format!("{}|{}|{}", self.source, cache_key(track), self.status.name());
+        if signature == self.saved && self.last_save.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        let state = json!({
+            "mode": if self.radio { "radio" } else { "ondemand" },
+            "source": { "id": self.source, "name": self.source_name },
+            "station": self.station,
+            // Radio keeps its private fields, so a quick restart can resume
+            // the very same play.
+            "track": track,
+            "position": self.clock.at(),
+            "history": self.history,
+            "savedAt": now_ms() as u64,
+        });
+        write_resume(&state);
+        self.saved = signature;
+        self.last_save = Instant::now();
     }
 
     fn publish(&mut self) {
@@ -836,6 +986,7 @@ impl Engine {
             "error": self.error,
             "busy": self.busy,
         });
+        self.save();
         let line = json!({ "event": "state", "state": state }).to_string();
         *self.shared.state.lock().unwrap() = state;
         self.shared.subscribers.lock().unwrap().retain(|s| s.send(line.clone()).is_ok());
@@ -871,4 +1022,37 @@ fn fetch(pandora: &Pandora, track: &Value, source: &str) -> anyhow::Result<Loade
         gain: info["fileGain"].as_str().and_then(|g| g.parse().ok()).unwrap_or(0.0),
         receipt: info["audioReceiptURL"].as_str().unwrap_or_default().to_string(),
     })
+}
+
+/// Where the listener was, kept across restarts and reboots. It holds play
+/// tokens, so it is private to the user.
+fn resume_path() -> std::path::PathBuf {
+    let base = std::env::var("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state"));
+    base.join("omadora").join("resume.json")
+}
+
+fn read_resume() -> Option<Value> {
+    serde_json::from_str(&std::fs::read_to_string(resume_path()).ok()?).ok()
+}
+
+fn write_resume(state: &Value) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = resume_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(state.to_string().as_bytes()));
+    if written.is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
 }

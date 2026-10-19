@@ -18,7 +18,7 @@ Typing in search filters your stations; Enter searches Pandora for songs, artist
 
 The mode chips are the current station's own modes (My Station, Crowd Faves, Deep Cuts, and whatever else Pandora offers for it); a new mode starts with the next song. The moon sets a sleep timer (15, 30, 60 minutes, off) that pauses whatever is playing, and the overflow menu marks a radio song as tired.
 
-The widget starts the engine on its own and restarts it if it dies; the engine keeps its Pandora session across restarts, so it stays the one device listening. Left-click opens and closes the player. Middle-click and the wheel skip forward.
+The widget starts the engine on its own and restarts it if it dies; the engine keeps its Pandora session across restarts, so it stays the one device listening. It also remembers where you were: after a restart or a reboot the player comes back paused on the same song, at the same spot, and play picks up from there. Left-click opens and closes the player. Middle-click and the wheel skip forward.
 
 ## Sign in
 
