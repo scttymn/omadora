@@ -57,9 +57,9 @@ match = "title"
 
 ## AI
 
-The AI tab, next to Up next and History, suggests songs and artists like the one playing. It asks an AI agent only while the tab is on screen, a few seconds after the song changes (so skipping through songs doesn't ask about each one), and keeps each song's answer. Every suggestion is checked against the catalog, preferring original recordings over remixes, so everything listed plays: click a song to play it (or start a station from it, when your plan can't play songs on demand), or an artist to open their page. What's playing and your recent songs and thumbs up go to the agent's provider.
+The AI tab, next to Up next and History, suggests songs and artists like the one playing. It asks an AI agent only while the tab is on screen, a few seconds after the song changes (so skipping through songs doesn't ask about each one), and keeps each song's answer. Every suggestion is checked against the catalog, preferring original recordings over remixes, so everything listed plays: click a song to play it (or start a station from it, when your plan can't play songs on demand), or an artist to open their page. Only the song playing (its title, artist, and album) goes to the agent and its provider; nothing about your listening history does.
 
-It uses Omarchy's default agent (`omarchy default agent`) and never changes it; with none set, the tab asks you to set one. Claude Code, Codex, Gemini, OpenCode, GitHub Copilot, Crush, Grok, Pi, and Oh My Pi work, each run headless with no tools. The tab's header names the agent, model, and effort: "From Codex · GPT-6-Astra · high", with a button to ask again. Model and effort are menus of what that agent offers, read from the agent itself so they stay current (Codex's model cache, with each model's efforts; Claude Code's own help; `opencode models`), and the choice is saved for Omadora alone. Agents that can't list their models show just their name.
+It uses Omarchy's default agent (`omarchy default agent`) and never changes it; with none set, the tab asks you to set one. Claude Code, Codex, Antigravity, Gemini, OpenCode, GitHub Copilot, Crush, Grok, Pi, and Oh My Pi work. Each runs headless from a private, empty folder, with the song sent on standard input (Antigravity only takes it as an argument). Tools are turned off for Claude Code, Copilot, Pi, and Oh My Pi, and Codex runs in its read-only sandbox; the others have no switch for that. The tab's header names the agent, model, and effort: "From Codex · GPT-6-Astra · high", with a button to ask again. Model and effort are menus of what that agent offers, read from the agent itself so they stay current (Codex's model cache, with each model's efforts; Claude Code's own help; `agy models`; `opencode models`), and the choice is saved for Omadora alone. Agents that can't list their models show just their name.
 
 Everything is also in `~/.config/omadora/settings.toml`:
 
@@ -67,7 +67,8 @@ Everything is also in `~/.config/omadora/settings.toml`:
 [ai]
 # What to suggest; Omadora adds what's playing and the answer's format.
 prompt = "Suggest 8 deep cuts from the same scene and decade, no hits."
-# An agent other than Omarchy's default, for Omadora only.
+# An agent other than Omarchy's default, for Omadora only
+# (for example "antigravity", which Omarchy doesn't offer yet).
 # agent = "claude"
 # Or any command instead of an agent: the prompt on stdin, the answer on stdout.
 # command = "my-llm --json"
@@ -92,7 +93,7 @@ To remove it:
 omarchy plugin remove scttymn.omadora
 ```
 
-Removing the plugin runs none of its code, so your Pandora password stays in the desktop keyring (GNOME Keyring, which Omarchy runs). Sign out in the player first, or clear it afterwards with `secret-tool clear application omadora`. Omadora's other files are in `~/.config/omadora`, `~/.local/state/omadora`, `~/.local/share/omadora` (the downloaded engine), and `~/.cache/omadora`.
+Removing the plugin runs none of its code, so your Pandora password stays in the desktop keyring (GNOME Keyring, which Omarchy runs). Sign out in the player first, or clear it afterwards with `secret-tool clear application omadora`. The engine also keeps running, signed in, until you log out; stop it with `pkill -x omadora-engine`. Omadora's other files are in `~/.config/omadora`, `~/.local/state/omadora`, `~/.local/share/omadora` (the downloaded engine), and `~/.cache/omadora`.
 
 ## Sign in
 
@@ -112,6 +113,6 @@ omarchy-shell shell rescanPlugins
 omarchy plugin enable scttymn.omadora right
 ```
 
-`make install` builds the engine into `bin/`, copies the plugin to `~/.config/omarchy/plugins/scttymn.omadora` (Omarchy will not load a symlinked plugin), and stops a running engine so the widget starts the new one. The widget prefers a build from `make` in the plugin's `bin/` to a downloaded release. Saving a file under that plugin directory reloads it, though a changed QML type sometimes needs `omarchy-restart-shell`.
+`make install` builds the engine into `bin/`, copies the plugin (without `.git`) to `~/.config/omarchy/plugins/scttymn.omadora` (Omarchy will not load a symlinked plugin), and stops a running engine so the widget starts the new one. Outside a git clone, the widget prefers that build to a downloaded release; in a clone from GitHub, `bin/` is never used, so only a download the pin vouches for runs. To go back to updates from GitHub, reinstall with `omarchy plugin add`. Saving a file under that plugin directory reloads it, though a changed QML type sometimes needs `omarchy-restart-shell`.
 
-To release: bump the version in `manifest.json` and `engine/Cargo.toml`, tag `vX.Y.Z` and push the tag. The release workflow builds the engines and attaches them to a GitHub release; then `make pin VERSION=X.Y.Z` records their checksums in `engine-release.json`, and committing that lets installs download it.
+To release: bump the version in `manifest.json` and `engine/Cargo.toml`, tag `vX.Y.Z` and push the tag. The release workflow builds the engines and attaches them to a GitHub release; then `make pin VERSION=X.Y.Z` downloads both binaries, checks them against the release's checksums, and records their SHA-256 in `engine-release.json`. Committing that lets installs download it. Pin right after the workflow finishes, and from your own machine.

@@ -1,5 +1,6 @@
 //! omadora-engine            run the engine (the widget starts this)
 //! omadora-engine send JSON  send one request and print what comes back
+//!     (JSON may be "-" to read it from stdin, as for signIn)
 //!     --events N            also print state events for N seconds
 
 use anyhow::{Result, bail};
@@ -23,7 +24,15 @@ fn main() -> Result<()> {
 
 fn send(args: &[String]) -> Result<()> {
     let Some(raw) = args.first() else { bail!("send JSON [--events SECONDS]") };
-    let mut request: Value = serde_json::from_str(raw)?;
+    // "-" reads the request from stdin, keeping a password off the command line.
+    let raw = if raw == "-" {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+        text
+    } else {
+        raw.clone()
+    };
+    let mut request: Value = serde_json::from_str(&raw)?;
     if request.get("req").is_none() {
         request["req"] = Value::from(1);
     }
@@ -31,7 +40,7 @@ fn send(args: &[String]) -> Result<()> {
         Some(i) => Duration::from_secs_f64(args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(5.0)),
         None => Duration::ZERO,
     };
-    let mut stream = UnixStream::connect(server::socket_path())?;
+    let mut stream = UnixStream::connect(server::socket_path()?)?;
     stream.write_all(format!("{request}\n").as_bytes())?;
     stream.set_read_timeout(Some(Duration::from_millis(200)))?;
     let started = Instant::now();

@@ -1146,21 +1146,5 @@ fn read_resume() -> Option<Value> {
 }
 
 fn write_resume(state: &Value) {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let path = resume_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let tmp = path.with_extension("tmp");
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-        .and_then(|mut f| f.write_all(state.to_string().as_bytes()));
-    if written.is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    let _ = crate::files::write_private(&resume_path(), state.to_string().as_bytes());
 }

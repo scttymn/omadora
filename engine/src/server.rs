@@ -36,28 +36,25 @@ use crate::radio;
 use crate::engine::{Cmd, Shared};
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
-pub fn socket_path() -> PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-        use std::os::unix::fs::MetadataExt;
-        let uid = std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(0);
-        format!("/tmp/omadora-{uid}")
-    });
-    PathBuf::from(runtime).join("omadora").join("engine.sock")
+pub fn socket_path() -> Result<PathBuf> {
+    Ok(crate::files::runtime_dir()?.join("engine.sock"))
 }
 
+/// The longest request line accepted; sign-in is the biggest real one.
+const MAX_REQUEST: usize = 64 * 1024;
+
 pub fn serve(shared: Arc<Shared>) -> Result<()> {
-    let path = socket_path();
+    let path = socket_path()?;
     if UnixStream::connect(&path).is_ok() {
         return Err(anyhow!("an engine is already running at {}", path.display()));
     }
     let _ = std::fs::remove_file(&path);
-    std::fs::create_dir_all(path.parent().unwrap())?;
     let listener = UnixListener::bind(&path)?;
     eprintln!("omadora-engine listening on {}", path.display());
     for stream in listener.incoming() {
@@ -91,8 +88,18 @@ fn connection(shared: Arc<Shared>, stream: UnixStream) -> Result<()> {
         }
     });
 
-    for line in BufReader::new(stream).lines() {
-        let line = line?;
+    // One request per line, and no line longer than a request needs.
+    let mut reader = BufReader::new(stream);
+    loop {
+        let mut line = String::new();
+        let read = (&mut reader).take(MAX_REQUEST as u64 + 1).read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+        if line.len() > MAX_REQUEST {
+            let _ = out_tx.send(json!({ "ok": false, "error": "request too long" }).to_string());
+            break;
+        }
         if line.trim().is_empty() {
             continue;
         }

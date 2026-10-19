@@ -115,8 +115,11 @@ fn decode(bytes: Arc<Vec<u8>>, encoding: &str, gain_db: f32) -> Result<impl Sour
 pub fn decode_with_ffmpeg(bytes: &[u8]) -> Result<Vec<u8>> {
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
+    use std::time::Instant;
     let mut child = Command::new("ffmpeg")
-        .args(["-v", "error", "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le"])
+        // Only the pipe: a malformed stream can't send ffmpeg to files or
+        // the network.
+        .args(["-v", "error", "-protocol_whitelist", "pipe", "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le"])
         .args(["-ar", &PCM_RATE.to_string(), "-ac", &PCM_CHANNELS.to_string(), "pipe:1"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -125,23 +128,46 @@ pub fn decode_with_ffmpeg(bytes: &[u8]) -> Result<Vec<u8>> {
         .context("running ffmpeg to decode radio audio")?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     let input = bytes.to_vec();
-    // Feed and drain at once, or a full pipe would stall both sides.
+    // Feed, drain, and collect errors all at once, or a full pipe would
+    // stall ffmpeg and this with it.
     let feeder = std::thread::spawn(move || {
         let _ = stdin.write_all(&input);
     });
-    let mut out = Vec::new();
-    child.stdout.take().expect("piped stdout").read_to_end(&mut out)?;
-    let _ = feeder.join();
-    let status = child.wait()?;
-    if !status.success() || out.is_empty() {
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = stdout.read_to_end(&mut out);
+        out
+    });
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let errors = std::thread::spawn(move || {
         let mut err = String::new();
-        if let Some(mut e) = child.stderr.take() {
-            let _ = e.read_to_string(&mut err);
+        let _ = stderr.read_to_string(&mut err);
+        err
+    });
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
+        if started.elapsed() > FFMPEG_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("ffmpeg took too long to decode the track");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let _ = feeder.join();
+    let out = reader.join().unwrap_or_default();
+    let err = errors.join().unwrap_or_default();
+    if !status.success() || out.is_empty() {
         anyhow::bail!("ffmpeg could not decode the track: {}", err.trim());
     }
     Ok(wav(out))
 }
+
+/// A radio track decodes in a few seconds; this is a stuck ffmpeg.
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60);
 
 const PCM_RATE: u32 = 44_100;
 const PCM_CHANNELS: u16 = 2;

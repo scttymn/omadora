@@ -78,10 +78,13 @@ fn escape(text: &str) -> String {
             && text[i + 1..]
                 .find(';')
                 .is_some_and(|end| end > 0 && end <= 8 && text[i + 1..i + 1 + end].chars().all(|c| c.is_ascii_alphanumeric() || c == '#'));
-        if ch == '&' && !entity {
-            out.push_str("&amp;");
-        } else {
-            out.push(ch);
+        // Angle brackets too: a stray "<img…" at the end of a bio must not
+        // reach the rich-text label as a tag.
+        match ch {
+            '&' if !entity => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
         }
     }
     out

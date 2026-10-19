@@ -142,10 +142,16 @@ Item {
           fetchRetry.restart()
           return
         }
-        // "ok PATH", "updated PATH", or "warning PATH: why".
+        // "ok PATH", "updated PATH", or "warning PATH<tab>why"; anything else
+        // (a crash, a script error) is a failure, retried after a while.
         var word = line.split(" ")[0]
         var rest = line.slice(word.length + 1)
-        root.binary = word === "warning" ? rest.split(": ")[0] : rest
+        if (["ok", "updated", "warning"].indexOf(word) < 0 || rest.indexOf("/") !== 0) {
+          root.startError = "The Omadora engine couldn't be set up."
+          fetchRetry.restart()
+          return
+        }
+        root.binary = word === "warning" ? rest.split("\t")[0] : rest
         root.startError = ""
         root.fetched = root.binary !== ""
         // The script stopped an engine that wasn't this one (the release

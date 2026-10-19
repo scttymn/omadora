@@ -4,6 +4,7 @@ pub mod audio;
 pub mod catalog;
 pub mod discover;
 pub mod engine;
+pub mod files;
 pub mod pandora;
 pub mod radio;
 pub mod recommend;

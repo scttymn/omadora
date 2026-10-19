@@ -53,10 +53,11 @@ fn setting(text: &str, name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// The keyring entry's attributes, as `secret-tool` takes them.
-fn keyring_entry(user: &str) -> [&str; 4] {
-    ["application", "omadora", "user", user]
-}
+/// The keyring entry's attributes, as `secret-tool` takes them. Only the
+/// application: there's one account, and an email among them would show in
+/// the process list while secret-tool runs. (Entries saved with a user
+/// attribute still match.)
+const KEYRING_ENTRY: [&str; 2] = ["application", "omadora"];
 
 /// The email of the saved account, if there is one.
 pub fn saved_user() -> Option<String> {
@@ -66,7 +67,7 @@ pub fn saved_user() -> Option<String> {
 /// The saved account's email and password.
 pub fn credentials() -> Result<(String, String)> {
     let Some(user) = saved_user() else { bail!(NO_ACCOUNT) };
-    let out = Command::new("secret-tool").arg("lookup").args(keyring_entry(&user)).output();
+    let out = Command::new("secret-tool").arg("lookup").args(KEYRING_ENTRY).output();
     let password = out.ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
     if password.is_empty() {
         // The keyring lost it (or is locked); ask again.
@@ -109,12 +110,11 @@ pub struct Account {
 /// the account file. Any account saved before is replaced.
 fn remember(user: &str, password: &str) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     use std::process::Stdio;
     let _ = Command::new("secret-tool").args(["clear", "application", "omadora"]).output();
     let mut child = Command::new("secret-tool")
         .args(["store", "--label=Omadora account"])
-        .args(keyring_entry(user))
+        .args(KEYRING_ENTRY)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -126,14 +126,7 @@ fn remember(user: &str, password: &str) -> Result<()> {
         bail!("the keyring did not save the password ({})", String::from_utf8_lossy(&out.stderr).trim());
     }
     let path = account_path();
-    fs::create_dir_all(config_dir())?;
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)
-        .and_then(|mut f| f.write_all(format!("user = {user}\n").as_bytes()))
+    crate::files::write_private(&path, format!("user = {user}\n").as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
@@ -142,20 +135,21 @@ fn remember(user: &str, password: &str) -> Result<()> {
 pub fn forget() {
     let _ = Command::new("secret-tool").args(["clear", "application", "omadora"]).output();
     let _ = fs::remove_file(account_path());
-    let _ = fs::remove_file(session_path());
+    if let Some(path) = session_path() {
+        let _ = fs::remove_file(path);
+    }
 }
 
 /// Pandora treats every sign-in as a separate listener, and only one may
 /// play at a time. Keeping the session across engine restarts keeps the
 /// engine the same listener. It lives in the runtime dir: private to the
 /// user, gone at reboot.
-fn session_path() -> PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(runtime).join("omadora").join("session.json")
+fn session_path() -> Option<PathBuf> {
+    crate::files::runtime_dir().ok().map(|dir| dir.join("session.json"))
 }
 
 fn load_session() -> Option<(String, Account)> {
-    let saved: Value = serde_json::from_str(&fs::read_to_string(session_path()).ok()?).ok()?;
+    let saved: Value = serde_json::from_str(&fs::read_to_string(session_path()?).ok()?).ok()?;
     let token = saved["token"].as_str().filter(|t| !t.is_empty())?.to_string();
     let account = Account {
         subscriber: saved["subscriber"].as_bool().unwrap_or(false),
@@ -165,24 +159,9 @@ fn load_session() -> Option<(String, Account)> {
 }
 
 fn save_session(token: &str, account: &Account) {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let path = session_path();
-    if let Some(dir) = path.parent() {
-        let _ = fs::create_dir_all(dir);
-    }
+    let Some(path) = session_path() else { return };
     let body = json!({ "token": token, "subscriber": account.subscriber, "audioAds": account.audio_ads });
-    let tmp = path.with_extension("tmp");
-    let written = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-        .and_then(|mut f| f.write_all(body.to_string().as_bytes()));
-    if written.is_ok() {
-        let _ = fs::rename(&tmp, &path);
-    }
+    let _ = crate::files::write_private(&path, body.to_string().as_bytes());
 }
 
 /// Partner login, then user login. Returns the user token and the account.
@@ -196,7 +175,8 @@ fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, 
             "version": "5",
             "includeUrls": true,
         }))
-        .send()?
+        .send()
+        .map_err(reqwest::Error::without_url)?
         .json()?;
     if partner["stat"] != "ok" {
         bail!("The device sign-in was refused ({})", partner["message"].as_str().unwrap_or("no reason given"));
@@ -226,7 +206,8 @@ fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, 
         ))
         .header("Content-Type", "text/plain")
         .body(encrypt(&body.to_string()))
-        .send()?
+        .send()
+        .map_err(reqwest::Error::without_url)?
         .json()?;
     if login["stat"] != "ok" {
         // 1002 is wrong credentials; anything else is Pandora's own message.
@@ -358,7 +339,8 @@ impl Pandora {
             .header("X-CsrfToken", &self.csrf)
             .header("X-AuthToken", token)
             .json(body)
-            .send()?;
+            .send()
+            .map_err(reqwest::Error::without_url)?;
         let status = resp.status().as_u16();
         let text = resp.text()?;
         Ok((status, serde_json::from_str(&text).unwrap_or(Value::Null)))
@@ -381,7 +363,7 @@ impl Pandora {
 
     /// Download a whole file, such as a track's audio.
     pub fn download(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = self.http.get(url).timeout(Duration::from_secs(120)).send()?;
+        let resp = self.http.get(url).timeout(Duration::from_secs(120)).send().map_err(reqwest::Error::without_url)?;
         if !resp.status().is_success() {
             bail!("audio download failed: HTTP {}", resp.status());
         }

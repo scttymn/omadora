@@ -13,10 +13,12 @@
 # this one.
 #
 # Prints one line for the widget: "ok PATH", "updated PATH" (a running engine
-# was stopped for this one), "warning PATH: …" (kept the engine it had), or
+# was stopped for this one), "warning PATH<tab>…" (kept the engine it had), or
 # "error: …" (there is none). Exits non-zero only on an error.
 
 set -euo pipefail
+# Whatever else goes wrong, say so on the line the widget reads.
+trap 'echo "error: setting up the Omadora engine failed (line $LINENO)"' ERR
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 dev="$here/bin/omadora-engine"
@@ -40,14 +42,17 @@ use() {
   exit 0
 }
 
-[[ -x $dev ]] && use "$dev"
+# A development build (`make install` copies the plugin without .git). In a
+# clone from GitHub, bin/ is never trusted: only a download the pin vouches
+# for runs.
+[[ -x $dev && ! -e $here/.git ]] && use "$dev"
 
 have_engine() { [[ -x $bin ]]; }
 
 # Keep a working engine when a new one cannot be had; fail only without one.
 give_up() {
   if have_engine; then
-    echo "warning $(realpath "$bin"): $1"
+    printf 'warning %s\t%s\n' "$(realpath "$bin")" "$1"
     exit 0
   fi
   echo "error: $1"
@@ -77,7 +82,8 @@ trap 'rm -f "$tmp"' EXIT
 trap 'exit 1' INT TERM HUP
 
 url="https://github.com/$repo/releases/download/v$version/omadora-engine-$arch-linux"
-curl -fsSL --retry 2 --connect-timeout 15 -o "$tmp" "$url" ||
+curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 --connect-timeout 15 --max-time 300 \
+  -o "$tmp" "$url" ||
   give_up "Couldn't download the Omadora engine $version from GitHub."
 
 got=$(sha256sum "$tmp" | cut -d' ' -f1)

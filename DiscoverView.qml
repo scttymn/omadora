@@ -30,6 +30,13 @@ Item {
   }
   // Filters pick among the feeds with pictures; text-only stories are all
   // in the Headlines rail, whatever the filter.
+  // Articles open in the browser, and only web addresses: the engine drops
+  // anything else, and this checks again.
+  function openLink(link) {
+    if (/^https?:\/\//i.test(String(link || "")))
+      Qt.openUrlExternally(link)
+  }
+
   readonly property var withPictures: items.filter(function (i) { return i.image !== "" })
   readonly property var headlines: (discover ? discover.items : []).filter(function (i) { return i.image === "" })
   readonly property var pictureFeeds: {
@@ -276,8 +283,8 @@ Item {
       height: grid.cellHeight
       readonly property var where: root.source(modelData.feed)
       readonly property var chipList: root.chips(modelData)
-      // The cover from the engine's disk cache, so each is downloaded once;
-      // straight from the magazine if the engine can't fetch it.
+      // The cover from the engine's disk cache, so each is downloaded once.
+      // If the engine can't or won't fetch it, the card keeps its swatch.
       readonly property string remote: modelData.image
       property string cover: ""
       onRemoteChanged: loadCover()
@@ -290,7 +297,7 @@ Item {
           // The card may have scrolled away and been destroyed meanwhile.
           try {
             if (card && wanted === card.remote)
-              card.cover = ok ? "file://" + result.path : wanted
+              card.cover = ok ? "file://" + result.path : ""
           } catch (e) {}
         })
       }
@@ -310,7 +317,7 @@ Item {
           MouseArea {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
-            onClicked: Qt.openUrlExternally(cardItem.modelData.link)
+            onClicked: root.openLink(cardItem.modelData.link)
           }
         }
 
@@ -342,7 +349,7 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: Qt.openUrlExternally(cardItem.modelData.link)
+            onClicked: root.openLink(cardItem.modelData.link)
           }
         }
 
@@ -471,7 +478,7 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: Qt.openUrlExternally(headline.modelData.link)
+            onClicked: root.openLink(headline.modelData.link)
           }
         }
 

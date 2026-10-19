@@ -35,7 +35,7 @@ use crate::catalog;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, LazyLock, Mutex, Once};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 const REFRESH: Duration = Duration::from_secs(30 * 60);
@@ -234,7 +234,7 @@ fn read_feed(http: &reqwest::blocking::Client, feed: &Feed, last: Option<&Fetche
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, modified);
         }
     }
-    let response = request.send()?;
+    let response = request.send().map_err(reqwest::Error::without_url)?;
     if response.status() == reqwest::StatusCode::NOT_MODIFIED {
         if let Some(last) = last {
             return Ok(last.clone());
@@ -243,7 +243,7 @@ fn read_feed(http: &reqwest::blocking::Client, feed: &Feed, last: Option<&Fetche
     let response = response.error_for_status()?;
     let header = |name| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
     let (etag, modified) = (header(reqwest::header::ETAG), header(reqwest::header::LAST_MODIFIED));
-    let articles = parse_feed(feed, &response.bytes()?)?;
+    let articles = parse_feed(feed, &read_capped(response, FEED_MAX_BYTES)?)?;
     Ok(Fetched { etag, modified, articles })
 }
 
@@ -254,7 +254,9 @@ fn parse_feed(feed: &Feed, bytes: &[u8]) -> anyhow::Result<Vec<Article>> {
         .entries
         .into_iter()
         .filter_map(|e| {
-            let link = e.links.first().map(|l| l.href.clone()).unwrap_or_default();
+            // Only web links: the widget opens them, and a feed could name
+            // a file or another app's URL scheme instead.
+            let link = e.links.first().map(|l| l.href.clone()).filter(|l| web_url(l)).unwrap_or_default();
             let title = e.title.map(|t| strip_html(&t.content)).unwrap_or_default();
             if title.is_empty() || link.is_empty() {
                 return None;
@@ -271,6 +273,7 @@ fn parse_feed(feed: &Feed, bytes: &[u8]) -> anyhow::Result<Vec<Article>> {
                 }))
                 .next()
                 .or_else(|| fallback_images.get(&link).cloned())
+                .filter(|i| web_url(i) && public_host(i))
                 .map(card_size)
                 .unwrap_or_default();
             Some(Article {
@@ -725,7 +728,11 @@ pub fn snapshot(pandora: Arc<Pandora>, force: bool) -> Value {
 
 /// Pictures not shown for this long are deleted.
 const IMAGE_KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-const IMAGE_MAX_BYTES: usize = 8 << 20;
+const IMAGE_MAX_BYTES: u64 = 8 << 20;
+/// The whole picture cache, before the least recently shown go.
+const IMAGE_CACHE_MAX: u64 = 200 << 20;
+/// A feed this big isn't a feed.
+const FEED_MAX_BYTES: u64 = 5 << 20;
 /// Downloads at once; a screenful of new covers should not hit a magazine
 /// all together.
 const IMAGE_DOWNLOADS: usize = 4;
@@ -735,28 +742,87 @@ fn images_dir() -> PathBuf {
     base.join("omadora").join("images")
 }
 
-/// A file name for a picture's URL: FNV-1a, which (unlike std's hasher) is
-/// the same in every build, plus the URL's extension.
+/// A file name for a picture's URL: its SHA-256, so no crafted URL can share
+/// another's file, plus the URL's extension.
 fn image_file(url: &str) -> String {
-    let hash = url.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    use sha2::{Digest, Sha256};
+    let hash: String = Sha256::digest(url.as_bytes()).iter().take(16).map(|b| format!("{b:02x}")).collect();
     let path = url.split(['?', '#']).next().unwrap_or_default();
     let ext = path
         .rsplit_once('.')
         .map(|(_, e)| e.to_ascii_lowercase())
         .filter(|e| ["jpg", "jpeg", "png", "webp", "gif"].contains(&e.as_str()))
         .unwrap_or_else(|| "img".into());
-    format!("{hash:016x}.{ext}")
+    format!("{hash}.{ext}")
 }
 
-/// Delete pictures nobody has looked at in a month.
+/// Delete pictures nobody has looked at in a month, then the least recently
+/// shown until the cache is under its size cap.
 fn prune_images(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut kept: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
-        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > IMAGE_KEEP);
-        if old {
+        let Ok(meta) = entry.metadata() else { continue };
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        if modified.elapsed().is_ok_and(|age| age > IMAGE_KEEP) {
             let _ = std::fs::remove_file(entry.path());
+        } else {
+            kept.push((modified, meta.len(), entry.path()));
         }
     }
+    kept.sort();
+    let mut total: u64 = kept.iter().map(|(_, len, _)| len).sum();
+    for (_, len, path) in kept {
+        if total <= IMAGE_CACHE_MAX {
+            break;
+        }
+        let _ = std::fs::remove_file(path);
+        total -= len;
+    }
+}
+
+/// A web address: http or https, nothing a desktop would hand to some
+/// other program.
+pub fn web_url(url: &str) -> bool {
+    reqwest::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
+}
+
+/// A host on the internet, not this machine or the local network: a feed
+/// shouldn't be able to point the engine at a router or a local service.
+/// (Names are taken at their word; this doesn't resolve them.)
+fn public_host(url: &str) -> bool {
+    use std::net::IpAddr;
+    let Ok(u) = reqwest::Url::parse(url) else { return false };
+    match u.host() {
+        Some(url::Host::Domain(name)) => {
+            let name = name.to_ascii_lowercase();
+            !(name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") || name.ends_with(".internal"))
+        }
+        Some(url::Host::Ipv4(ip)) => {
+            let ip = IpAddr::V4(ip);
+            !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || matches!(ip, IpAddr::V4(v4) if v4.is_private() || v4.is_link_local() || v4.is_broadcast() || v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64))
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            let seg = ip.segments()[0];
+            !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || (seg & 0xfe00) == 0xfc00 || (seg & 0xffc0) == 0xfe80)
+        }
+        None => false,
+    }
+}
+
+/// A response body, refused once it passes `max` bytes rather than read
+/// whole first.
+fn read_capped(response: reqwest::blocking::Response, max: u64) -> anyhow::Result<Vec<u8>> {
+    use std::io::Read;
+    if response.content_length().is_some_and(|len| len > max) {
+        anyhow::bail!("too large");
+    }
+    let mut body = Vec::new();
+    response.take(max + 1).read_to_end(&mut body)?;
+    if body.len() as u64 > max {
+        anyhow::bail!("too large");
+    }
+    Ok(body)
 }
 
 static DOWNLOADS: LazyLock<(Mutex<usize>, Condvar)> = LazyLock::new(|| (Mutex::new(0), Condvar::new()));
@@ -765,12 +831,19 @@ static DOWNLOADS: LazyLock<(Mutex<usize>, Condvar)> = LazyLock::new(|| (Mutex::n
 /// time. Only pictures of the articles on hand are fetched.
 pub fn image(url: &str) -> anyhow::Result<PathBuf> {
     let known = STATE.lock().unwrap().articles.iter().any(|a| a.image == url);
-    if !known {
+    if !known || !web_url(url) || !public_host(url) {
         anyhow::bail!("not a Discover picture");
     }
     let dir = images_dir();
-    static PRUNE: Once = Once::new();
-    PRUNE.call_once(|| prune_images(&dir));
+    // Tidy the cache at start and every few hours after.
+    static PRUNED: Mutex<Option<Instant>> = Mutex::new(None);
+    {
+        let mut last = PRUNED.lock().unwrap();
+        if last.is_none_or(|at| at.elapsed() > Duration::from_secs(6 * 60 * 60)) {
+            *last = Some(Instant::now());
+            prune_images(&dir);
+        }
+    }
     let path = dir.join(image_file(url));
     let touch = |path: &PathBuf| {
         if let Ok(file) = std::fs::File::options().write(true).open(path) {
@@ -791,7 +864,7 @@ pub fn image(url: &str) -> anyhow::Result<PathBuf> {
         if path.exists() {
             return Ok(path.clone());
         }
-        let response = IMAGE_HTTP.get(url).send()?.error_for_status()?;
+        let response = IMAGE_HTTP.get(url).send().map_err(reqwest::Error::without_url)?.error_for_status()?;
         let is_image = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -800,10 +873,7 @@ pub fn image(url: &str) -> anyhow::Result<PathBuf> {
         if !is_image {
             anyhow::bail!("not a picture");
         }
-        let bytes = response.bytes()?;
-        if bytes.len() > IMAGE_MAX_BYTES {
-            anyhow::bail!("picture too large");
-        }
+        let bytes = read_capped(response, IMAGE_MAX_BYTES).map_err(|_| anyhow::anyhow!("picture too large"))?;
         std::fs::create_dir_all(&dir)?;
         let tmp = path.with_extension(format!("{}.part", std::process::id()));
         std::fs::write(&tmp, &bytes)?;
@@ -816,9 +886,19 @@ pub fn image(url: &str) -> anyhow::Result<PathBuf> {
 }
 
 static IMAGE_HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    // Redirects only to other public web addresses.
+    let policy = reqwest::redirect::Policy::custom(|attempt| {
+        let next = attempt.url().as_str();
+        if attempt.previous().len() >= 5 || !web_url(next) || !public_host(next) {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    });
     reqwest::blocking::Client::builder()
         .user_agent(format!("{USER_AGENT} RSS reader (+https://github.com/scttymn/omadora)"))
         .timeout(Duration::from_secs(20))
+        .redirect(policy)
         .build()
         .unwrap_or_default()
 });
@@ -850,6 +930,20 @@ mod tests {
         assert!(a.ends_with(".jpg"));
         assert_ne!(a, image_file("https://media.pitchfork.com/photos/2/master/w_640,c_limit/A.jpg"));
         assert!(image_file("https://example.com/cover?size=640").ends_with(".img"));
+    }
+
+    #[test]
+    fn only_public_web_addresses() {
+        assert!(web_url("https://pitchfork.com/reviews/albums/x/"));
+        assert!(!web_url("file:///home/me/x.desktop"));
+        assert!(!web_url("steam://run/1"));
+        assert!(!web_url("javascript:alert(1)"));
+        assert!(public_host("https://media.pitchfork.com/a.jpg"));
+        for local in ["http://localhost/a.jpg", "http://127.0.0.1/a.jpg", "http://192.168.1.1/a.jpg", "http://10.0.0.2/a.jpg", "http://169.254.169.254/x", "http://[::1]/a.jpg", "http://printer.local/a.jpg"] {
+            assert!(!public_host(local), "{local}");
+        }
+        assert_ne!(image_file("https://a.example/x.jpg"), image_file("https://a.example/y.jpg"));
+        assert!(image_file("https://a.example/x.jpg").ends_with(".jpg"));
     }
 
     #[test]
