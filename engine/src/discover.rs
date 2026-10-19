@@ -27,15 +27,16 @@
 //!
 //! Feeds are fetched at most every half hour, and conditionally: a magazine
 //! that sends an ETag or Last-Modified answers an unchanged feed with an
-//! empty 304.
+//! empty 304. Article pictures are downloaded once, when the widget first
+//! shows them, and kept in `~/.cache/omadora/images` while in use.
 
 use crate::pandora::{Pandora, USER_AGENT};
 use crate::catalog;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, Once};
+use std::time::{Duration, Instant, SystemTime};
 
 const REFRESH: Duration = Duration::from_secs(30 * 60);
 const SUMMARY_LENGTH: usize = 280;
@@ -695,6 +696,108 @@ pub fn snapshot(pandora: Arc<Pandora>, force: bool) -> Value {
     })
 }
 
+// ---- pictures, cached on disk
+
+/// Pictures not shown for this long are deleted.
+const IMAGE_KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const IMAGE_MAX_BYTES: usize = 8 << 20;
+/// Downloads at once; a screenful of new covers should not hit a magazine
+/// all together.
+const IMAGE_DOWNLOADS: usize = 4;
+
+fn images_dir() -> PathBuf {
+    let base = std::env::var("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|_| home().join(".cache"));
+    base.join("omadora").join("images")
+}
+
+/// A file name for a picture's URL: FNV-1a, which (unlike std's hasher) is
+/// the same in every build, plus the URL's extension.
+fn image_file(url: &str) -> String {
+    let hash = url.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let ext = path
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .filter(|e| ["jpg", "jpeg", "png", "webp", "gif"].contains(&e.as_str()))
+        .unwrap_or_else(|| "img".into());
+    format!("{hash:016x}.{ext}")
+}
+
+/// Delete pictures nobody has looked at in a month.
+fn prune_images(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > IMAGE_KEEP);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+static DOWNLOADS: LazyLock<(Mutex<usize>, Condvar)> = LazyLock::new(|| (Mutex::new(0), Condvar::new()));
+
+/// A Discover article's picture as a local file, downloading it the first
+/// time. Only pictures of the articles on hand are fetched.
+pub fn image(url: &str) -> anyhow::Result<PathBuf> {
+    let known = STATE.lock().unwrap().articles.iter().any(|a| a.image == url);
+    if !known {
+        anyhow::bail!("not a Discover picture");
+    }
+    let dir = images_dir();
+    static PRUNE: Once = Once::new();
+    PRUNE.call_once(|| prune_images(&dir));
+    let path = dir.join(image_file(url));
+    let touch = |path: &PathBuf| {
+        if let Ok(file) = std::fs::File::options().write(true).open(path) {
+            let _ = file.set_modified(SystemTime::now());
+        }
+    };
+    if path.exists() {
+        touch(&path);
+        return Ok(path);
+    }
+    let (count, freed) = &*DOWNLOADS;
+    {
+        let mut running = freed.wait_while(count.lock().unwrap(), |n| *n >= IMAGE_DOWNLOADS).unwrap();
+        *running += 1;
+    }
+    let result = (|| {
+        // Another request may have fetched it while this one waited.
+        if path.exists() {
+            return Ok(path.clone());
+        }
+        let response = IMAGE_HTTP.get(url).send()?.error_for_status()?;
+        let is_image = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|t| t.starts_with("image/"));
+        if !is_image {
+            anyhow::bail!("not a picture");
+        }
+        let bytes = response.bytes()?;
+        if bytes.len() > IMAGE_MAX_BYTES {
+            anyhow::bail!("picture too large");
+        }
+        std::fs::create_dir_all(&dir)?;
+        let tmp = path.with_extension(format!("{}.part", std::process::id()));
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(path.clone())
+    })();
+    *count.lock().unwrap() -= 1;
+    freed.notify_one();
+    result
+}
+
+static IMAGE_HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .user_agent(format!("{USER_AGENT} RSS reader (+https://github.com/scttymn/omadora)"))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap_or_default()
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,6 +816,15 @@ mod tests {
     fn titles_lose_quotes_and_features() {
         assert_eq!(clean_title("“Lies” [ft. Lana Del Rey]"), "Lies");
         assert_eq!(clean_title("“expectations”"), "expectations");
+    }
+
+    #[test]
+    fn picture_files_are_stable_and_keep_their_type() {
+        let a = image_file("https://media.pitchfork.com/photos/1/master/w_640,c_limit/A.jpg");
+        assert_eq!(a, image_file("https://media.pitchfork.com/photos/1/master/w_640,c_limit/A.jpg"));
+        assert!(a.ends_with(".jpg"));
+        assert_ne!(a, image_file("https://media.pitchfork.com/photos/2/master/w_640,c_limit/A.jpg"));
+        assert!(image_file("https://example.com/cover?size=640").ends_with(".img"));
     }
 
     #[test]

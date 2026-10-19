@@ -277,6 +277,24 @@ Item {
       height: grid.cellHeight
       readonly property var where: root.source(modelData.feed)
       readonly property var chipList: root.chips(modelData)
+      // The cover from the engine's disk cache, so each is downloaded once;
+      // straight from the magazine if the engine can't fetch it.
+      readonly property string remote: modelData.image
+      property string cover: ""
+      onRemoteChanged: loadCover()
+      Component.onCompleted: loadCover()
+      function loadCover() {
+        var wanted = remote
+        cover = ""
+        var card = cardItem
+        root.engine.request("image", { url: wanted }, function (ok, result) {
+          // The card may have scrolled away and been destroyed meanwhile.
+          try {
+            if (card && wanted === card.remote)
+              card.cover = ok ? "file://" + result.path : wanted
+          } catch (e) {}
+        })
+      }
 
       Column {
         x: grid.gap / 2
@@ -288,7 +306,7 @@ Item {
           height: width
           rings: false
           art: root.theme.raised
-          artUrl: cardItem.modelData.image
+          artUrl: cardItem.cover
 
           MouseArea {
             anchors.fill: parent

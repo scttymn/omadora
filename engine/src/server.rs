@@ -20,6 +20,7 @@
 //!   thumbUp | thumbDown | tired    feedback on the radio track playing
 //!   listenHere                     take the account over from another device
 //!   discover {refresh?}            magazine articles, matched to albums, songs, artists
+//!   image {url}                    an article's picture as a local file, cached
 //!   modes {station}                a station's modes and which is on
 //!   setMode {station, mode}        switch it; the next song is in the new mode
 
@@ -161,6 +162,7 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         "thumbDown" => control(Cmd::ThumbDown),
         "tired" => control(Cmd::Tired),
         "listenHere" => control(Cmd::ListenHere),
+        "image" => Ok(json!({ "path": discover::image(arg(request, "url")?)?.to_string_lossy() })),
         "discover" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in to Pandora"))?;
             Ok(discover::snapshot(pandora, request["refresh"].as_bool().unwrap_or(false)))
