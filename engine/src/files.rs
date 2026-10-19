@@ -6,6 +6,28 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+/// Everything that belongs to one Pandora account: where you were, your
+/// podcasts, and the pages saved for it. `~/.local/share/omadora/accounts/ID`,
+/// the ID a hash of the account so the folder doesn't spell out the email.
+pub fn account_dir_for(user: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"));
+    let id = hex::encode(Sha256::digest(user.trim().to_lowercase().as_bytes()));
+    base.join("omadora").join("accounts").join(&id[..16])
+}
+
+/// The saved account's folder, made private the first time; none signed
+/// out.
+pub fn account_dir() -> Option<PathBuf> {
+    let dir = account_dir_for(&crate::pandora::saved_user()?);
+    if fs::symlink_metadata(&dir).is_err() {
+        let _ = fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir);
+    }
+    Some(dir)
+}
+
 fn uid() -> u32 {
     fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(u32::MAX)
 }

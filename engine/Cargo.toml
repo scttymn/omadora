@@ -13,7 +13,7 @@ serde_json = "1"
 blowfish = "0.9"
 hex = "0.4"
 urlencoding = "2"
-rodio = { version = "0.23", default-features = false, features = ["playback", "symphonia-mp3", "wav"] }
+rodio = { version = "0.23", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "wav"] }
 feed-rs = "3.0.0"
 toml = "1.1.8"
 sha2 = "0.10"

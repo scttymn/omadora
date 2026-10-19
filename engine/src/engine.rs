@@ -1,8 +1,10 @@
 //! The player: what is playing, what comes next, and the audio.
 //!
-//! Two kinds of listening share one queue. On demand, the queue is an album,
-//! playlist, or song, fixed up front. On radio, it is a station's tracks,
-//! fetched a few at a time and topped up as they play.
+//! Three kinds of listening share one queue. On demand, the queue is an
+//! album, playlist, or song, fixed up front. On radio, it is a station's
+//! tracks, fetched a few at a time and topped up as they play. A podcast's
+//! is episodes of one show, which stream as they download and pick up where
+//! you left each one.
 //!
 //! Where the listener was (source, song, position) is saved as it changes
 //! and restored, paused, when the engine starts again. A restore makes no
@@ -14,7 +16,7 @@
 //! their results back as commands, tagged with a generation so results for
 //! something the listener has already moved past are dropped.
 
-use crate::audio::{Audio, decode_with_ffmpeg};
+use crate::audio::{Audio, Media, decode_with_ffmpeg};
 use crate::catalog;
 use crate::pandora::Pandora;
 use crate::radio::{self, Busy};
@@ -24,10 +26,11 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// A downloaded track, ready to decode.
+/// A track's audio, ready to decode: downloaded, or (an episode) still
+/// downloading.
 #[derive(Clone)]
 pub struct Loaded {
-    bytes: Arc<Vec<u8>>,
+    media: Media,
     encoding: String,
     gain: f32,
     receipt: String,
@@ -71,6 +74,9 @@ pub enum Cmd {
     Busy { generation: u64, message: String },
     Prefetched { key: String, loaded: Loaded },
     Restored { generation: u64, source: String, name: String, tracks: Vec<Value>, track: String, position: f64 },
+    // An episode has downloaded far enough to seek to where the listener
+    // asked.
+    SeekReady { generation: u64, position: f64, play: bool },
     Rated { token: String, rating: i64 },
     Failed(String),
 }
@@ -151,7 +157,7 @@ impl Status {
 }
 
 /// Fields the engine needs from a radio track but clients never see.
-const PRIVATE: [&str; 6] = ["token", "audioUrl", "encoding", "gain", "receipt", "skipUrl"];
+const PRIVATE: [&str; 7] = ["token", "audioUrl", "encoding", "gain", "receipt", "skipUrl", "enclosure"];
 
 fn public(track: &Value) -> Value {
     let mut out = track.clone();
@@ -166,6 +172,23 @@ fn public(track: &Value) -> Value {
 /// Radio can play the same song twice, so its cache key is the play token.
 fn cache_key(track: &Value) -> String {
     track["token"].as_str().or(track["id"].as_str()).unwrap_or_default().to_string()
+}
+
+fn is_episode(track: &Value) -> bool {
+    track["kind"] == "episode"
+}
+
+fn is_podcast(source: &str) -> bool {
+    source.starts_with("podcast:")
+}
+
+/// A source's tracks: an album, playlist, or song from Pandora's catalog,
+/// or a podcast's episodes.
+fn tracks_for(pandora: Option<&Pandora>, source: &str, track: Option<&str>) -> anyhow::Result<(String, Vec<Value>)> {
+    if is_podcast(source) {
+        return crate::podcasts::queue_for(pandora, source, track);
+    }
+    catalog::tracks_for(pandora.ok_or_else(|| anyhow::anyhow!("Still signing in."))?, source)
 }
 
 fn now_ms() -> u128 {
@@ -299,6 +322,9 @@ impl Engine {
             }
         }
         if self.status == Status::Playing && self.audio.finished() {
+            if let Some(id) = self.current().filter(|t| is_episode(t)).and_then(|t| t["id"].as_str()) {
+                crate::podcasts::mark(id, true);
+            }
             self.advance(1, false);
         }
         if self.status == Status::Playing {
@@ -381,7 +407,9 @@ impl Engine {
                     self.queue.clear();
                     self.index = None;
                     self.cache.clear();
-                    let _ = std::fs::remove_file(resume_path());
+                    if let Some(path) = resume_path() {
+                        let _ = std::fs::remove_file(path);
+                    }
                     self.publish();
                 }
             }
@@ -595,6 +623,25 @@ impl Engine {
                 self.index = Some(found.unwrap_or(0));
                 self.show_restored(if found.is_some() { position } else { 0.0 });
             }
+            Cmd::SeekReady { generation, position, play } => {
+                if generation != self.generation || !self.audio_ready {
+                    return;
+                }
+                match self.audio.seek(Duration::from_secs_f64(position)) {
+                    Ok(()) => {
+                        if play {
+                            self.audio.play();
+                        }
+                        self.status = if play { Status::Playing } else { Status::Paused };
+                        self.clock.set(position, play);
+                    }
+                    Err(e) => {
+                        self.status = Status::Paused;
+                        self.error = format!("{e:#}");
+                    }
+                }
+                self.publish();
+            }
             Cmd::Prefetched { key, loaded } => {
                 self.cache.insert(key, loaded);
             }
@@ -756,23 +803,27 @@ impl Engine {
     }
 
     fn play(&mut self, source: String, track: Option<String>, index: Option<usize>) {
-        // Same album or playlist already queued: just jump within it.
-        if !self.radio && source == self.source && !self.queue.is_empty() {
-            let at = track
-                .as_deref()
-                .and_then(|id| self.queue.iter().position(|t| t["id"] == id))
-                .or(index)
-                .unwrap_or(0);
+        // Same album or playlist already queued: just jump within it. (An
+        // episode not in the queue builds a new one.)
+        let found = track.as_deref().and_then(|id| self.queue.iter().position(|t| t["id"] == id));
+        if !self.radio && source == self.source && !self.queue.is_empty() && (found.is_some() || !is_podcast(&source)) {
+            let at = found.or(index).unwrap_or(0);
             self.load(at.min(self.queue.len() - 1));
             return;
         }
-        let Some(pandora) = self.pandora() else { return };
+        // A podcast's own feed needs no Pandora; everything else does.
+        let pandora = if is_podcast(&source) {
+            self.shared.pandora()
+        } else {
+            let Some(pandora) = self.pandora() else { return };
+            Some(pandora)
+        };
         self.generation += 1;
         let generation = self.generation;
         self.begin_loading();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let cmd = match catalog::tracks_for(&pandora, &source) {
+            let cmd = match tracks_for(pandora.as_deref(), &source, track.as_deref()) {
                 Ok((name, tracks)) => Cmd::Queued { generation, source, name, tracks, track, index },
                 Err(e) => Cmd::QueueFailed { generation, error: format!("{e:#}") },
             };
@@ -848,6 +899,28 @@ impl Engine {
             self.begin(index, loaded);
             return;
         }
+        if is_episode(&track) {
+            // Where the listener left it, unless something says otherwise.
+            let id = track["id"].as_str().unwrap_or_default();
+            let start = *self.resume_at.get_or_insert_with(|| crate::podcasts::start_at(id));
+            self.stop_audio();
+            self.clock.set(start, false);
+            self.status = Status::Loading;
+            self.publish();
+            let (tx, generation, pandora) = (self.tx.clone(), self.generation, self.shared.pandora());
+            std::thread::spawn(move || {
+                let result = crate::podcasts::open(pandora.as_deref(), &track, start)
+                    .map(|download| Loaded {
+                        media: Media::Stream(download),
+                        encoding: track["encoding"].as_str().unwrap_or("mp3").to_string(),
+                        gain: 0.0,
+                        receipt: String::new(),
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = tx.send(Cmd::Loaded { generation, index, result });
+            });
+            return;
+        }
         let Some(pandora) = self.pandora() else { return };
         self.stop_audio();
         self.clock.set(0.0, false);
@@ -861,7 +934,7 @@ impl Engine {
     }
 
     fn begin(&mut self, index: usize, loaded: Loaded) {
-        if let Err(e) = self.audio.load(loaded.bytes.clone(), &loaded.encoding, loaded.gain) {
+        if let Err(e) = self.audio.load(loaded.media.clone(), &loaded.encoding, loaded.gain) {
             self.status = Status::Idle;
             self.fail(format!("{e:#}"));
             return;
@@ -886,7 +959,7 @@ impl Engine {
         if length <= 0.0 || length - self.clock.at() > QUEUE_AHEAD {
             return;
         }
-        if self.audio.queue_next(loaded.bytes, &loaded.encoding, loaded.gain).is_ok() {
+        if self.audio.queue_next(loaded.media, &loaded.encoding, loaded.gain).is_ok() {
             self.queued_next = Some(index + 1);
         }
     }
@@ -962,6 +1035,10 @@ impl Engine {
 
     fn prefetch(&mut self, index: usize) {
         let Some(track) = self.queue.get(index).cloned() else { return };
+        // An episode is too big to fetch on spec.
+        if is_episode(&track) {
+            return;
+        }
         let key = cache_key(&track);
         if self.cache.contains_key(&key) {
             return;
@@ -1058,11 +1135,42 @@ impl Engine {
                 self.publish();
                 return;
             }
+            // An episode not downloaded that far yet: wait for it off this
+            // thread, quiet meanwhile, then seek.
+            if let Some((download, track)) = self.current_download() {
+                let wanted = crate::podcasts::bytes_for(&download, &track, target);
+                if wanted.is_some_and(|bytes| !download.wait_for(bytes, Duration::ZERO)) {
+                    let play = self.status == Status::Playing;
+                    self.audio.pause();
+                    self.status = Status::Loading;
+                    self.clock.set(target, false);
+                    self.publish();
+                    let (tx, generation) = (self.tx.clone(), self.generation);
+                    std::thread::spawn(move || {
+                        if download.wait_for(wanted.unwrap_or(0), Duration::from_secs(600)) {
+                            let _ = tx.send(Cmd::SeekReady { generation, position: target, play });
+                        } else {
+                            let error = download.failure().unwrap_or_else(|| "This episode is slow to download.".into());
+                            let _ = tx.send(Cmd::Failed(error));
+                        }
+                    });
+                    return;
+                }
+            }
             match self.audio.seek(Duration::from_secs_f64(target)) {
                 Ok(()) => self.clock.set(target, self.status == Status::Playing),
                 Err(e) => self.error = format!("{e:#}"),
             }
             self.publish();
+        }
+    }
+
+    /// The current episode's download, while it plays.
+    fn current_download(&self) -> Option<(Arc<crate::stream::Download>, Value)> {
+        let track = self.current().filter(|t| is_episode(t))?.clone();
+        match self.cache.get(&cache_key(&track))?.media.clone() {
+            Media::Stream(download) => Some((download, track)),
+            Media::Memory(_) => None,
         }
     }
 
@@ -1100,12 +1208,15 @@ impl Engine {
             self.show_restored(position);
             return;
         }
-        let Some(pandora) = self.shared.pandora() else { return };
+        let pandora = self.shared.pandora();
+        if pandora.is_none() && !is_podcast(&source) {
+            return;
+        }
         self.generation += 1;
         let (tx, generation) = (self.tx.clone(), self.generation);
         let track = track["id"].as_str().unwrap_or_default().to_string();
         std::thread::spawn(move || {
-            if let Ok((name, tracks)) = catalog::tracks_for(&pandora, &source) {
+            if let Ok((name, tracks)) = tracks_for(pandora.as_deref(), &source, Some(&track)) {
                 let _ = tx.send(Cmd::Restored { generation, source, name, tracks, track, position });
             }
         });
@@ -1127,6 +1238,10 @@ impl Engine {
         let signature = format!("{}|{}|{}", self.source, cache_key(track), self.status.name());
         if signature == self.saved && self.last_save.elapsed() < Duration::from_secs(5) {
             return;
+        }
+        // How far into the episode, once it has really started.
+        if is_episode(track) && self.audio_ready && self.status != Status::Loading {
+            crate::podcasts::remember(track, self.clock.at());
         }
         let state = json!({
             "mode": if self.radio { "radio" } else { "ondemand" },
@@ -1154,7 +1269,7 @@ impl Engine {
         }
         let state = json!({
             "status": self.status.name(),
-            "mode": if self.source.is_empty() { "" } else if self.radio { "radio" } else { "ondemand" },
+            "mode": if self.source.is_empty() { "" } else if self.radio { "radio" } else if is_podcast(&self.source) { "podcast" } else { "ondemand" },
             "signedIn": account.is_some(),
             "needsAccount": self.needs_account,
             "collectionVersion": self.collection_version,
@@ -1165,7 +1280,8 @@ impl Engine {
             "track": track,
             "index": self.index,
             "queue": self.queue.iter().map(public).collect::<Vec<_>>(),
-            "history": self.history.iter().map(public).collect::<Vec<_>>(),
+            // Radio's songs, or the episodes listened to lately.
+            "history": if is_podcast(&self.source) { json!(crate::podcasts::recent(20)) } else { json!(self.history.iter().map(public).collect::<Vec<_>>()) },
             "position": self.clock.at(),
             "positionAt": now_ms() as u64,
             "volume": self.audio.volume(),
@@ -1188,7 +1304,7 @@ fn fetch(pandora: &Pandora, track: &Value, source: &str) -> anyhow::Result<Loade
         let encoding = track["encoding"].as_str().unwrap_or_default();
         let (bytes, encoding) = if encoding == "mp3" { (bytes, "mp3") } else { (decode_with_ffmpeg(&bytes)?, "wav") };
         return Ok(Loaded {
-            bytes: Arc::new(bytes),
+            media: Media::Memory(Arc::new(bytes)),
             encoding: encoding.to_string(),
             gain: track["gain"].as_str().and_then(|g| g.parse().ok()).unwrap_or(0.0),
             receipt: track["receipt"].as_str().unwrap_or_default().to_string(),
@@ -1203,16 +1319,21 @@ fn fetch(pandora: &Pandora, track: &Value, source: &str) -> anyhow::Result<Loade
     let url = info["audioURL"].as_str().ok_or_else(|| anyhow::anyhow!("No audio came back for this track"))?;
     let bytes = pandora.download(url)?;
     Ok(Loaded {
-        bytes: Arc::new(bytes),
+        media: Media::Memory(Arc::new(bytes)),
         encoding: info["audioEncoding"].as_str().unwrap_or("mp3").to_string(),
         gain: info["fileGain"].as_str().and_then(|g| g.parse().ok()).unwrap_or(0.0),
         receipt: info["audioReceiptURL"].as_str().unwrap_or_default().to_string(),
     })
 }
 
-/// Where the listener was, kept across restarts and reboots. It holds play
-/// tokens, so it is private to the user.
-fn resume_path() -> std::path::PathBuf {
+/// Where the listener was, kept across restarts and reboots, in the
+/// account's folder. It holds play tokens, so it is private to the user.
+fn resume_path() -> Option<std::path::PathBuf> {
+    Some(crate::files::account_dir()?.join("resume.json"))
+}
+
+/// Where it was kept before accounts had folders: the state folder.
+fn old_resume_path() -> std::path::PathBuf {
     let base = std::env::var("XDG_STATE_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state"));
@@ -1220,9 +1341,21 @@ fn resume_path() -> std::path::PathBuf {
 }
 
 fn read_resume() -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(resume_path()).ok()?).ok()
+    let path = resume_path()?;
+    // An old resume point moves into its account's folder, if it is this
+    // account's; another account's stays put for that one.
+    if !path.exists() {
+        let old = old_resume_path();
+        let theirs = std::fs::read_to_string(&old).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        if theirs.as_ref().is_some_and(|s| s["user"].as_str().map(str::to_string) == crate::pandora::saved_user()) {
+            let _ = std::fs::rename(&old, &path);
+        }
+    }
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
 fn write_resume(state: &Value) {
-    let _ = crate::files::write_private(&resume_path(), state.to_string().as_bytes());
+    if let Some(path) = resume_path() {
+        let _ = crate::files::write_private(&path, state.to_string().as_bytes());
+    }
 }

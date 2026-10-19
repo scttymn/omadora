@@ -2,7 +2,7 @@ import QtQuick
 import Quickshell.Services.Pipewire
 
 // What is playing and what can be done about it. omadora-engine does the
-// playing, radio and on demand alike; this shapes its state for the views
+// playing, radio, on demand, and podcasts alike; this shapes its state for the views
 // and keeps what the engine does not: the station list, the current
 // station's modes, the sleep timer, and the system volume.
 QtObject {
@@ -13,6 +13,9 @@ QtObject {
   readonly property string mode: engine.state.mode || ""
   readonly property bool onDemand: mode === "ondemand"
   readonly property bool isRadio: mode === "radio"
+  readonly property bool isPodcast: mode === "podcast"
+  // A queue to step back and forth through: an album, playlist, or show.
+  readonly property bool stepsThrough: onDemand || isPodcast
 
   readonly property var track: engine.track
   readonly property string title: track ? track.title || "" : ""
@@ -41,6 +44,8 @@ QtObject {
   readonly property string sourceKind: {
     if (isRadio)
       return "station"
+    if (isPodcast)
+      return "podcast"
     var id = engine.source.id || ""
     if (id.indexOf("AL:") === 0)
       return "album"
@@ -51,15 +56,19 @@ QtObject {
   readonly property string sourceId: engine.source.id || ""
   readonly property string sourceLabel: engine.source.name || ""
   readonly property string station: isRadio ? sourceLabel : ""
+  // The show playing (a Pandora id or its feed's address): the episode's
+  // own, as Up Next moves from show to show.
+  readonly property string showKey: isPodcast && track ? track.show || "" : ""
 
-  // Radio tracks carry their own rights; on demand allows everything.
+  // Radio tracks carry their own rights; on demand and podcasts allow
+  // everything.
   function allows(right) {
-    return onDemand || (isRadio && track !== null && track[right] === true)
+    return stepsThrough || (isRadio && track !== null && track[right] === true)
   }
   readonly property bool canReplay: length > 0 && allows("canReplay")
   readonly property bool canSeek: canReplay
-  readonly property bool canGoBack: onDemand
-  readonly property bool canGoNext: onDemand ? engine.index + 1 < engine.queue.length : allows("canSkip")
+  readonly property bool canGoBack: stepsThrough
+  readonly property bool canGoNext: stepsThrough ? engine.index + 1 < engine.queue.length : allows("canSkip")
   readonly property bool canRate: isRadio && allows("canRate")
   readonly property bool canTire: isRadio && allows("canTire")
   // 1 thumbs up, 2 thumbs down, as the views expect.
@@ -87,6 +96,11 @@ QtObject {
   function next() { engine.next() }
   function previous() { engine.previous() }
   function replay() { engine.replay() }
+  // Back or ahead a few seconds, as podcast players do.
+  function skip(seconds) {
+    if (canSeek)
+      engine.seek(Math.max(0, Math.min(length, position + seconds)))
+  }
   function seekFraction(fraction) {
     if (canSeek)
       engine.seek(fraction * length)
@@ -94,7 +108,7 @@ QtObject {
   // Thumbs up: on radio, feedback to the station; anywhere else, the song
   // goes into (or comes out of) the listener's collection.
   readonly property bool liked: isRadio ? rating === 1 : (track ? track.collected === true : false)
-  readonly property bool canLike: isRadio ? canRate : (trackId !== "" && engine.signedIn)
+  readonly property bool canLike: isRadio ? canRate : (!isPodcast && trackId !== "" && engine.signedIn)
   function thumbUp() {
     if (isRadio)
       engine.request("thumbUp")
@@ -108,15 +122,19 @@ QtObject {
     engine.play(sourceId, trackId)
   }
 
+  // An episode, with the rest of its show queued around it.
+  function playEpisode(showKey, episodeId) {
+    engine.play("podcast:" + showKey, episodeId)
+  }
+
   // ---- stations
 
   property var stations: []
   property bool stationsLoaded: false
 
+  // The saved list at once, then the fresh one once signed in.
   function refreshStations() {
-    if (!engine.signedIn)
-      return
-    engine.request("stations", {}, function (ok, list) {
+    engine.requestPage("stations", {}, function (ok, list) {
       if (ok) {
         root.stations = list
         root.stationsLoaded = true
@@ -239,6 +257,10 @@ QtObject {
 
   property Connections signInWatch: Connections {
     target: root.engine
+    function onOnlineChanged() {
+      if (root.engine.online)
+        root.refreshStations()
+    }
     function onSignedInChanged() {
       if (root.engine.signedIn)
         root.refreshStations()

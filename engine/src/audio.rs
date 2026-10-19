@@ -1,6 +1,7 @@
 //! Audio output: the track playing, and the next one queued behind it near
-//! the end so they play without a gap. Decoded from memory, so seeking and
-//! replay need no network.
+//! the end so they play without a gap. Songs are decoded from memory, so
+//! seeking and replay need no network; podcast episodes from a download
+//! still filling (see `stream`).
 //!
 //! `OMADORA_AUDIO=null` swaps the sound device for a sink that consumes
 //! samples at real-time speed, for testing without making noise.
@@ -10,6 +11,13 @@ use rodio::{Decoder, Player, Source};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// What a track's audio comes from.
+#[derive(Clone)]
+pub enum Media {
+    Memory(Arc<Vec<u8>>),
+    Stream(Arc<crate::stream::Download>),
+}
 
 pub struct Audio {
     player: Player,
@@ -31,8 +39,8 @@ impl Audio {
     }
 
     /// Replace whatever is playing with this track, paused at the start.
-    pub fn load(&self, bytes: Arc<Vec<u8>>, encoding: &str, gain_db: f32) -> Result<()> {
-        let source = decode(bytes, encoding, gain_db)?;
+    pub fn load(&self, media: Media, encoding: &str, gain_db: f32) -> Result<()> {
+        let source = decode(media, encoding, gain_db)?;
         self.player.clear();
         self.player.append(source);
         Ok(())
@@ -40,8 +48,8 @@ impl Audio {
 
     /// Queue a track to start the moment the one playing ends, with no gap:
     /// albums that run one song into the next play as one piece.
-    pub fn queue_next(&self, bytes: Arc<Vec<u8>>, encoding: &str, gain_db: f32) -> Result<()> {
-        let source = decode(bytes, encoding, gain_db)?;
+    pub fn queue_next(&self, media: Media, encoding: &str, gain_db: f32) -> Result<()> {
+        let source = decode(media, encoding, gain_db)?;
         self.player.append(source);
         Ok(())
     }
@@ -92,20 +100,33 @@ impl Audio {
     }
 }
 
-/// A track decoded from memory, at its loudness. MP3's encoder delay and
-/// padding are trimmed (rodio's gapless decoding), so back-to-back tracks
-/// meet without a click of silence.
-fn decode(bytes: Arc<Vec<u8>>, encoding: &str, gain_db: f32) -> Result<impl Source + Send + 'static> {
-    let len = bytes.len() as u64;
-    let decoder = Decoder::builder()
-        .with_data(Cursor::new(SharedBytes(bytes)))
-        .with_byte_len(len)
-        .with_seekable(true)
-        .with_gapless(true)
-        .with_hint(if encoding.is_empty() { "mp3" } else { encoding })
-        .build()
-        .context("decoding the track")?;
-    Ok(decoder.amplify(db_to_gain(gain_db)))
+/// A track decoded at its loudness. MP3's encoder delay and padding are
+/// trimmed (rodio's gapless decoding), so back-to-back tracks meet without
+/// a click of silence.
+fn decode(media: Media, encoding: &str, gain_db: f32) -> Result<Box<dyn Source + Send>> {
+    let hint = if encoding.is_empty() { "mp3" } else { encoding };
+    let gain = db_to_gain(gain_db);
+    Ok(match media {
+        Media::Memory(bytes) => {
+            let len = bytes.len() as u64;
+            let decoder = Decoder::builder()
+                .with_data(Cursor::new(SharedBytes(bytes)))
+                .with_byte_len(len)
+                .with_seekable(true)
+                .with_gapless(true)
+                .with_hint(hint)
+                .build()
+                .context("decoding the track")?;
+            Box::new(decoder.amplify(gain))
+        }
+        Media::Stream(download) => {
+            let mut builder = Decoder::builder().with_data(download.reader()?).with_seekable(true).with_hint(hint);
+            if let Some(len) = download.total() {
+                builder = builder.with_byte_len(len);
+            }
+            Box::new(builder.build().context("decoding the episode")?.amplify(gain))
+        }
+    })
 }
 
 /// Radio comes as HE-AAC ("aacplus"), whose high band (SBR) no Rust decoder

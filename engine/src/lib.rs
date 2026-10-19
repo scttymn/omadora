@@ -8,6 +8,8 @@ pub mod discover;
 pub mod engine;
 pub mod files;
 pub mod pandora;
+pub mod podcasts;
 pub mod radio;
 pub mod recommend;
 pub mod server;
+pub mod stream;

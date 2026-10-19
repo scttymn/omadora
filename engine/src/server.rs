@@ -3,6 +3,10 @@
 //! Requests:  {"req": 1, "cmd": "album", "id": "AL:…"} → {"req": 1, "ok": true, "result": …}
 //! Events:    {"event": "state", "state": {...}}, sent on connect and on every change.
 //!
+//! Pages (discover, browse, stations, playlists, collectionArtists, podcasts,
+//! podcastTrending, podcast) also take `"cached": true`: their last answer,
+//! saved on disk, at once and without signing in; "nothing saved" if none.
+//!
 //! Commands
 //!   status                         current state (also pushed as events)
 //!   search {query}                 artists, albums, tracks, playlists
@@ -10,7 +14,7 @@
 //!   album {id}                     album with its tracks
 //!   playlists                      the listener's playlists
 //!   playlist {id}                  a playlist with its tracks
-//!   play {source, track?, index?}  play an album, playlist, or track id
+//!   play {source, track?, index?}  play an album, playlist, or track id; or a show's episode (source podcast:KEY)
 //!   toggle | pause | resume | next | previous | replay | stop
 //!   seek {position}                seconds into the track
 //!   volume {level}                 0.0 to 1.0, the engine's own level
@@ -26,8 +30,15 @@
 //!   signIn {user, password}        sign in, and save the account once Pandora accepts it
 //!   signOut                        forget the saved account and stop
 //!   browse {path?, id?}            the Browse page, a section's full list, or a mood's stations
+//!   podcasts                       your shows and their newest episodes
+//!   podcastTrending                shows people listen to now
+//!   podcastSearch {query}          shows from Pandora and Apple's directory; a feed's address finds it
+//!   podcast {key}                  a show (a PC: id or a feed's address) and its episodes
+//!   subscribe {key, add}           follow a show, or stop
+//!   markPlayed {id, played}        mark an episode played or not
 //!   discover {refresh?}            magazine articles, matched to albums, songs, artists
 //!   image {url}                    an article's picture as a local file, cached
+//!   art {url}                      any artwork as a local file, cached
 //!   recommend {fresh?}             songs like the one playing, from the AI agent
 //!   agents                         the AI agent in use, its model and effort, and the choices
 //!   setAi {model?, effort?}        Omadora's model or effort for that agent (null: the agent's own)
@@ -137,9 +148,33 @@ fn radio_only(value: &mut Value) {
     }
 }
 
+/// Pages the widget shows at once from their last answer, saved on disk,
+/// while it asks for a fresh one: so opening the player after a restart
+/// doesn't wait on sign-in and the network.
+const SAVED: [&str; 8] = ["discover", "browse", "stations", "playlists", "collectionArtists", "podcasts", "podcastTrending", "podcast"];
+
+/// Where a page's last answer is kept: in the account's folder (it can
+/// hold their playlists), one file per page.
+fn saved_path(request: &Value) -> Option<PathBuf> {
+    let cmd = request["cmd"].as_str().filter(|c| SAVED.contains(c))?;
+    let which = json!([cmd, request["path"], request["id"], request["key"]]).to_string();
+    let name = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(which.as_bytes()));
+    Some(crate::files::account_dir()?.join("pages").join(format!("{}.json", &name[..32])))
+}
+
 fn respond(shared: &Shared, request: &Value, out: &Sender<String>) {
     let req = request["req"].clone();
     let cmd = request["cmd"].as_str().unwrap_or_default();
+    // The last answer, if there is one: no sign-in, no network.
+    if request["cached"] == true {
+        let saved = saved_path(request).and_then(|path| std::fs::read_to_string(path).ok()).and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        let reply = match saved {
+            Some(result) => json!({ "req": req, "ok": true, "result": result }),
+            None => json!({ "req": req, "ok": false, "error": "nothing saved" }),
+        };
+        let _ = out.send(reply.to_string());
+        return;
+    }
     let catalog = matches!(cmd, "search" | "artist" | "album" | "playlist" | "playlists" | "recommend" | "discover");
     let on_demand = shared.pandora().is_none_or(|p| p.account().on_demand);
     let reply = match handle(shared, request).map(|mut result| {
@@ -148,7 +183,12 @@ fn respond(shared: &Shared, request: &Value, out: &Sender<String>) {
         }
         result
     }) {
-        Ok(result) => json!({ "req": req, "ok": true, "result": result }),
+        Ok(result) => {
+            if let Some(path) = saved_path(request) {
+                let _ = crate::files::write_private(&path, result.to_string().as_bytes());
+            }
+            json!({ "req": req, "ok": true, "result": result })
+        }
         Err(e) => json!({ "req": req, "ok": false, "error": format!("{e:#}") }),
     };
     let _ = out.send(reply.to_string());
@@ -227,6 +267,7 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         "agents" => Ok(crate::recommend::agents()),
         "setAi" => crate::recommend::set_ai(request),
         "image" => Ok(json!({ "path": discover::image(arg(request, "url")?)?.to_string_lossy() })),
+        "art" => Ok(json!({ "path": discover::artwork(arg(request, "url")?)?.to_string_lossy() })),
         "discover" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             Ok(discover::snapshot(pandora, request["refresh"].as_bool().unwrap_or(false)))
@@ -254,6 +295,19 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         "browse" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             crate::browse::page(&pandora, request["path"].as_str(), request["id"].as_str())
+        }
+        "podcasts" => Ok(crate::podcasts::overview(shared.pandora())),
+        "podcastTrending" => crate::podcasts::trending(),
+        "podcastSearch" => crate::podcasts::search(shared.pandora().as_deref(), arg(request, "query")?),
+        "podcast" => crate::podcasts::show(shared.pandora(), arg(request, "key")?),
+        "subscribe" => {
+            let add = request["add"].as_bool().ok_or_else(|| anyhow!("missing \"add\""))?;
+            crate::podcasts::subscribe(shared.pandora(), arg(request, "key")?, add)
+        }
+        "markPlayed" => {
+            let played = request["played"].as_bool().ok_or_else(|| anyhow!("missing \"played\""))?;
+            crate::podcasts::mark(arg(request, "id")?, played);
+            Ok(json!({}))
         }
         "collectionArtists" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;

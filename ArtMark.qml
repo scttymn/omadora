@@ -1,11 +1,30 @@
 import QtQuick
 import qs.Commons
+import "ArtCache.js" as ArtCache
 
 // Album art, or a swatch with the ring mark from the mockup when there is none.
 Item {
   id: root
 
   property string artUrl: ""
+  // What the Image loads: the engine's copy on disk, once it has one.
+  property string shownUrl: ""
+
+  function fetchArt() {
+    var wanted = artUrl
+    ArtCache.resolve(wanted, function (shown) {
+      if (root.artUrl === wanted)
+        root.shownUrl = shown
+    })
+  }
+  onArtUrlChanged: fetchArt()
+  Component.onCompleted: fetchArt()
+
+  // The cache script is one per importing file, so the engine is handed to
+  // it through here, where every picture shares it.
+  function useEngine(engine) {
+    ArtCache.setEngine(engine)
+  }
   property bool rings: true
   property color art: Color.accent
   property color ring: Color.background
@@ -37,7 +56,7 @@ Item {
       anchors.fill: parent
       fillMode: Image.PreserveAspectCrop
       asynchronous: true
-      source: root.artUrl || ""
+      source: root.shownUrl
       sourceSize.width: Math.round(width * 2)
       sourceSize.height: Math.round(height * 2)
       visible: status === Image.Ready

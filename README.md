@@ -17,7 +17,9 @@ Pandora in the Omarchy bar.
 
 <p align="center"><img src="docs/widget.png" width="410" alt="The mini player, opened from the bar"></p>
 
-The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app. Its header has four places: Now Playing (the track, with up next, history, and AI beside it), Music (your stations, playlists, and artists), Browse, and Discover. Each keeps its own pages, so going back to one finds you where you left it; choosing the one you're in takes you back to its start. The shrink control returns to the mini player. Colors come from the active Omarchy theme.
+The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app. Its header has four places: Discover (where it opens), Browse, Music (your stations, playlists, and artists), and Podcasts. Each keeps its own pages, so going back to one finds you where you left it; choosing the one you're in takes you back to its start. What's playing is in a strip along the bottom; click it for the track itself, with up next, history, and AI beside it. The shrink control returns to the mini player. Colors come from the active Omarchy theme.
+
+Pages open at once with what they showed last time, then update as fresh answers arrive, so a restart doesn't mean waiting on the network; artwork is kept on disk too, in `~/.cache/omadora/images`.
 
 Music shows a row or two of each kind, with filters for all of one: Shuffle all and your stations (hover one to remove it from your account; it asks first), your playlists, and your artists. The artists are those of the albums and songs in your collection and of the songs you've thumbed up on stations (Pandora keeps those in your My Thumbs Up playlist), the way Pandora's own My Collection does (Pandora's collection holds no artists itself); pick one to open their page, which starts with what of theirs is in your collection. Hover an album or song there to take it out (it asks first): out of your collection, and any station thumbs up on it removed.
 
@@ -27,17 +29,17 @@ Browse is Pandora's own: new music, artists on the rise, top artists, moods and 
 
 Pandora lets one device play an account at a time. When another one is playing, the player says so and offers Listen here, which takes the account over the way Pandora's own "Let me listen" does.
 
-Search finds songs, artists, albums, and playlists, with your own stations that match first. Artist pages have the bio, popular songs, the discography, and similar artists. Album and playlist pages list every track; picking one plays from there. Clicking the artist, the album, or the album or playlist name under the track opens its page, and Back retraces the way you came. Songs and albums your Pandora plan cannot play on demand say so, and start a station instead. Clicking a song in Up next jumps to it.
+Search finds songs, artists, albums, and playlists, with your own stations that match first (under Podcasts, it finds shows). Artist pages have the bio, popular songs, the discography, and similar artists. Album and playlist pages list every track; picking one plays from there. Clicking the artist, the album, or the album or playlist name under the track opens its page, and Back retraces the way you came. Songs and albums your Pandora plan cannot play on demand say so, and start a station instead. Clicking a song in Up next jumps to it.
 
 The mode chips are the current station's own modes (My Station, Crowd Faves, Deep Cuts, and whatever else Pandora offers for it); a new mode starts with the next song. The moon sets a sleep timer (15, 30, 60 minutes, off) that pauses whatever is playing, and the overflow menu marks a radio song as tired.
 
 The widget starts the engine on its own and restarts it if it dies; the engine keeps its Pandora session across restarts, so it stays the one device listening. Left-click opens and closes the player. Middle-click and the wheel skip forward.
 
-It also remembers where you were. After a restart or a reboot the player comes back paused on the same song at the same spot: the album or playlist with its Up next, or the station with the song that was on. Play picks up from there. Nothing plays or reaches Pandora until you press play, so a restart never takes your account from another device. On radio, the station's next songs are fetched once you do, and if the saved song is too old to play, the station starts fresh instead. It survives signing out, too: signing back in with the same account picks up where you were, while a different account starts fresh. Where you were lives in `~/.local/state/omadora/resume.json`.
+It also remembers where you were. After a restart or a reboot the player comes back paused on the same song at the same spot: the album or playlist with its Up next, or the station with the song that was on. Play picks up from there. Nothing plays or reaches Pandora until you press play, so a restart never takes your account from another device. On radio, the station's next songs are fetched once you do, and if the saved song is too old to play, the station starts fresh instead. It survives signing out, too: signing back in with the same account picks up where you were, while a different account starts fresh. Where you were lives in your account's folder, `~/.local/share/omadora/accounts/ID` (ID being a hash of the account, so the folder doesn't spell out the email), with its podcasts and the pages saved for it.
 
 ## Discover
 
-Discover, next to Music in the header, is a magazine of the latest reviews and news from music magazines' RSS feeds. Articles with a picture are cards, filtered by feed; stories without one are listed in the Headlines column on the right, which stays put whatever the filter. Each has chips for the album, song, or artist it is about on Pandora. A chip opens that page within Discover; the headline opens the article itself in your browser. A strip along the bottom keeps what's playing in reach.
+Discover, the first place in the header, is a magazine of the latest reviews and news from music magazines' RSS feeds. Articles with a picture are cards, filtered by feed; stories without one are listed in the Headlines column on the right, which stays put whatever the filter. Each has chips for the album, song, or artist it is about on Pandora. A chip opens that page within Discover; the headline opens the article itself in your browser. A strip along the bottom keeps what's playing in reach.
 
 A chip appears only when Pandora's title and artist both agree with the article, so a review never links to the wrong record; articles about something Pandora doesn't have still show, without chips. Matches are looked up once and cached; an article that found nothing is tried again the next time the engine starts, in case Pandora has added it.
 
@@ -58,6 +60,14 @@ match = "title"
 ```
 
 `match` says how to tell what an article is about: `pitchfork` (Pitchfork's review titles and links), `title` (titles like "Artist – Album" or "Artist, “Album”"), `tags` (the article's categories name artists; section tags like "Music News" are skipped, and artists in the headline come first), `headline` (the headline starts with the artist's name, as in "Orbital Revisits…"; a column's name before a colon is skipped, and the article must mention the artist too), or `none` (show it, match nothing). A tag can name someone outside music who shares a name with an artist; that article then links to the artist. When the file has feeds, they replace the defaults, so list Pitchfork's too if you want to keep them. Most magazines publish standard RSS (many from WordPress), so a new one usually needs only the right `match`; one with its own style needs a small matcher in `engine/src/discover.rs`.
+
+## Podcasts
+
+Podcasts come from three places at once, none needing an account beyond Pandora's: Pandora's own shows, Apple's public podcast directory (which leads to each show's RSS feed, for shows Pandora lacks), and any feed you add by its address ("Add a feed", or paste it into search). When a show turns up in more than one, it's listed once, from whichever has the newest episode, so a show that moved hosts doesn't come back stale.
+
+Your shows are the podcasts you follow on Pandora plus the feeds you follow here. Following a show Pandora has (even one found through Apple) follows it on Pandora too, so Pandora's apps list it; unfollowing takes it out of both. The tab lists your shows, their newest episodes, and what's trending on Apple Podcasts; a show's page has its episodes, each with how much is left or that it's played (hover one to mark it either way).
+
+Episodes stream as they download, so a long one starts in seconds, and each picks up where you left it. Up next is your new episodes you haven't played, in the order the tab lists them; history is what you've listened to lately; and the AI tab suggests other podcasts like the one playing (only the show's name and the episode's title go to the agent), each checked against Pandora and Apple so every one opens. The controls go back 15 seconds and ahead 30. Downloaded episodes are kept in `~/.cache/omadora/episodes`, up to 2 GB, oldest first out.
 
 ## AI
 
@@ -97,7 +107,7 @@ To remove it:
 omarchy plugin remove scttymn.omadora
 ```
 
-Removing the plugin runs none of its code, so your Pandora password stays in the desktop keyring (GNOME Keyring, which Omarchy runs). Sign out in the player first, or clear it afterwards with `secret-tool clear application omadora`. The engine also keeps running, signed in, until you log out; stop it with `pkill -x omadora-engine`. Omadora's other files are in `~/.config/omadora`, `~/.local/state/omadora`, `~/.local/share/omadora` (the downloaded engine), and `~/.cache/omadora`.
+Removing the plugin runs none of its code, so your Pandora password stays in the desktop keyring (GNOME Keyring, which Omarchy runs). Sign out in the player first, or clear it afterwards with `secret-tool clear application omadora`. The engine also keeps running, signed in, until you log out; stop it with `pkill -x omadora-engine`. Omadora's other files are in `~/.config/omadora`, `~/.local/state/omadora`, `~/.local/share/omadora` (the downloaded engine, and each account's folder), and `~/.cache/omadora` (pictures and episodes).
 
 ## Sign in
 

@@ -133,7 +133,7 @@ struct Article {
     categories: Vec<String>,
 }
 
-fn strip_html(html: &str) -> String {
+pub(crate) fn strip_html(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
     for ch in html.chars() {
@@ -159,7 +159,7 @@ fn strip_html(html: &str) -> String {
     decoded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn shorten(text: &str, limit: usize) -> String {
+pub(crate) fn shorten(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }
@@ -730,7 +730,7 @@ pub fn snapshot(pandora: Arc<Pandora>, force: bool) -> Value {
 const IMAGE_KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const IMAGE_MAX_BYTES: u64 = 8 << 20;
 /// The whole picture cache, before the least recently shown go.
-const IMAGE_CACHE_MAX: u64 = 200 << 20;
+const IMAGE_CACHE_MAX: u64 = 500 << 20;
 /// A feed this big isn't a feed.
 const FEED_MAX_BYTES: u64 = 5 << 20;
 /// Downloads at once; a screenful of new covers should not hit a magazine
@@ -790,7 +790,7 @@ pub fn web_url(url: &str) -> bool {
 /// A host on the internet, not this machine or the local network: a feed
 /// shouldn't be able to point the engine at a router or a local service.
 /// (Names are taken at their word; this doesn't resolve them.)
-fn public_host(url: &str) -> bool {
+pub(crate) fn public_host(url: &str) -> bool {
     use std::net::IpAddr;
     let Ok(u) = reqwest::Url::parse(url) else { return false };
     match u.host() {
@@ -812,7 +812,7 @@ fn public_host(url: &str) -> bool {
 
 /// A response body, refused once it passes `max` bytes rather than read
 /// whole first.
-fn read_capped(response: reqwest::blocking::Response, max: u64) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn read_capped(response: reqwest::blocking::Response, max: u64) -> anyhow::Result<Vec<u8>> {
     use std::io::Read;
     if response.content_length().is_some_and(|len| len > max) {
         anyhow::bail!("too large");
@@ -834,6 +834,20 @@ pub fn image(url: &str) -> anyhow::Result<PathBuf> {
     if !known || !web_url(url) || !public_host(url) {
         anyhow::bail!("not a Discover picture");
     }
+    cached_image(url)
+}
+
+/// Album, artist, show, and episode art as a local file, so pages that
+/// open from what was saved have their pictures at once too. Any picture
+/// on the public web; never anything that isn't an image.
+pub fn artwork(url: &str) -> anyhow::Result<PathBuf> {
+    if !web_url(url) || !public_host(url) {
+        anyhow::bail!("not a picture on the web");
+    }
+    cached_image(url)
+}
+
+fn cached_image(url: &str) -> anyhow::Result<PathBuf> {
     let dir = images_dir();
     // Tidy the cache at start and every few hours after.
     static PRUNED: Mutex<Option<Instant>> = Mutex::new(None);

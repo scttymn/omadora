@@ -56,6 +56,23 @@ Item {
 
   // ---- requests
 
+  // A page: its last answer, saved by the engine, at once; then, once
+  // signed in, a fresh one. `done(ok, result, fresh)` runs for each; a
+  // saved answer that arrives after the fresh one is dropped.
+  function requestPage(cmd, args, done) {
+    var settled = false
+    request(cmd, Object.assign({ cached: true }, args || {}), function (ok, result) {
+      if (ok && !settled)
+        done(true, result, false)
+    })
+    if (!signedIn)
+      return
+    request(cmd, args || {}, function (ok, result) {
+      settled = true
+      done(ok, result, true)
+    })
+  }
+
   function request(cmd, args, done) {
     var msg = Object.assign({ cmd: cmd, req: nextReq++ }, args || {})
     if (done)

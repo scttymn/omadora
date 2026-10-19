@@ -11,6 +11,13 @@ BarWidget {
 
   Engine {
     id: engine
+    // Every picture asks it for its copy on disk.
+    Component.onCompleted: artCache.useEngine(engine)
+  }
+
+  ArtMark {
+    id: artCache
+    visible: false
   }
 
   Player {
@@ -105,7 +112,10 @@ BarWidget {
       onCloseRequested: root.close()
       onArtistRequested: {
         root.expand()
-        fullPlayer.showArtist(player.artistId, player.artist)
+        if (player.isPodcast)
+          fullPlayer.showShow(player.showKey, player.artist)
+        else
+          fullPlayer.showArtist(player.artistId, player.artist)
       }
       onAlbumRequested: {
         root.expand()

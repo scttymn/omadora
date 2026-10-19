@@ -82,20 +82,21 @@ Rectangle {
       theme: root.theme
       anchors.verticalCenter: parent.verticalCenter
       // Radio rates songs; on demand there is a previous track instead.
-      icon: root.player.onDemand ? "󰒮" : (root.player.rating === 2 ? "󰔑" : "󰔒")
-      active: !root.player.onDemand && root.player.rating === 2
-      enabled: root.player.onDemand ? root.player.canGoBack : root.player.canRate
+      icon: root.player.stepsThrough ? "󰒮" : (root.player.rating === 2 ? "󰔑" : "󰔒")
+      active: !root.player.stepsThrough && root.player.rating === 2
+      enabled: root.player.stepsThrough ? root.player.canGoBack : root.player.canRate
       fontFamily: root.fontFamily
-      onActivated: root.player.onDemand ? root.player.previous() : root.player.thumbDown()
+      onActivated: root.player.stepsThrough ? root.player.previous() : root.player.thumbDown()
     }
 
     IconButton {
       theme: root.theme
       anchors.verticalCenter: parent.verticalCenter
-      icon: "󰦛"
+      // A podcast goes back 15 seconds instead.
+      icon: root.player.isPodcast ? "󱥆" : "󰦛"
       enabled: root.player.canReplay
       fontFamily: root.fontFamily
-      onActivated: root.player.replay()
+      onActivated: root.player.isPodcast ? root.player.skip(-15) : root.player.replay()
     }
 
     IconButton {
@@ -112,20 +113,22 @@ Rectangle {
     IconButton {
       theme: root.theme
       anchors.verticalCenter: parent.verticalCenter
-      icon: "󰒭"
-      enabled: root.player.canGoNext
+      // A podcast goes ahead 30 seconds here, and on to the next episode
+      // where the thumbs up would be.
+      icon: root.player.isPodcast ? "󰴆" : "󰒭"
+      enabled: root.player.isPodcast ? root.player.canSeek : root.player.canGoNext
       fontFamily: root.fontFamily
-      onActivated: root.player.next()
+      onActivated: root.player.isPodcast ? root.player.skip(30) : root.player.next()
     }
 
     IconButton {
       theme: root.theme
       anchors.verticalCenter: parent.verticalCenter
-      icon: root.player.liked ? "󰔓" : "󰔔"
-      active: root.player.liked
-      enabled: root.player.canLike
+      icon: root.player.isPodcast ? "󰒭" : (root.player.liked ? "󰔓" : "󰔔")
+      active: !root.player.isPodcast && root.player.liked
+      enabled: root.player.isPodcast ? root.player.canGoNext : root.player.canLike
       fontFamily: root.fontFamily
-      onActivated: root.player.thumbUp()
+      onActivated: root.player.isPodcast ? root.player.next() : root.player.thumbUp()
     }
   }
 }

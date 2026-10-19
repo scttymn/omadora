@@ -20,10 +20,21 @@ Item {
   // The window is on screen (set by the bar widget).
   property bool shown: true
 
-  // Four places to be: Now Playing (the track, with up next beside it),
-  // Music (your stations, playlists, and artists), Browse, and Discover
-  // (the magazine).
-  property string section: "now"
+  // Four places in the header: Discover (the magazine, and where the
+  // player opens), Browse, Music (your stations, playlists, and artists),
+  // and Podcasts. The track, with up next beside it, is a fifth, reached
+  // from the player along the bottom.
+  property string section: "discover"
+  Component.onCompleted: loadDiscover(false)
+
+  // The engine connected: the magazine it saved can show already.
+  Connections {
+    target: root.engine
+    function onOnlineChanged() {
+      if (root.engine.online && root.section === "discover")
+        root.loadDiscover(false)
+    }
+  }
 
   // Where each place starts: null is the track (Now Playing) or the
   // magazine (Discover).
@@ -32,6 +43,8 @@ Item {
       return { kind: "collection" }
     if (name === "browse")
       return { kind: "browse" }
+    if (name === "podcasts")
+      return { kind: "podcasts" }
     return null
   }
 
@@ -90,7 +103,13 @@ Item {
     var q = String(query || "").trim()
     if (q === "")
       return
-    open({ kind: "search", query: q })
+    // Under Podcasts, search finds shows (or a feed by its address).
+    open({ kind: section === "podcasts" ? "podcastSearch" : "search", query: q })
+  }
+
+  function showShow(key, name) {
+    if (key)
+      open({ kind: "show", key: key, name: name || "" })
   }
 
   // Ids when the engine is playing; names when the radio is.
@@ -122,12 +141,14 @@ Item {
   property var discover: null
   property bool discoverLoading: false
 
+  // What was saved shows at once; the fresh magazine replaces it.
   function loadDiscover(refresh) {
-    if (discoverLoading || !root.engine.signedIn)
+    if (discoverLoading)
       return
-    discoverLoading = true
-    root.engine.request("discover", { refresh: refresh === true }, function (ok, result) {
-      root.discoverLoading = false
+    discoverLoading = root.engine.signedIn
+    root.engine.requestPage("discover", { refresh: refresh === true }, function (ok, result, fresh) {
+      if (fresh)
+        root.discoverLoading = false
       if (ok)
         root.discover = result
     })
@@ -141,20 +162,33 @@ Item {
     onTriggered: root.loadDiscover(false)
   }
 
+  // Signed out (not just the engine restarting): the pages were that
+  // account's, and signing in starts over on Discover.
+  Connections {
+    target: root.engine
+    function onNeedsAccountChanged() {
+      if (!root.engine.needsAccount)
+        return
+      root.places = ({})
+      root.section = "discover"
+      root.page = null
+      root.pageStack = []
+    }
+  }
+
   Connections {
     target: root.engine
     function onSignedInChanged() {
-      // Signed out (or a new account): the pages were someone else's.
-      if (!root.engine.signedIn) {
-        root.places = ({})
+      if (!root.engine.signedIn)
         return
-      }
       if (root.section === "discover")
         root.loadDiscover(false)
     }
   }
 
   readonly property string sourceCaption: {
+    if (player.isPodcast)
+      return "Podcast  ·  " + player.artist
     if (!player.onDemand)
       return player.sourceLabel !== "" ? player.sourceLabel : "Omadora"
     var kind = player.sourceKind === "album" ? "Album" : player.sourceKind === "playlist" ? "Playlist" : "Song"
@@ -287,7 +321,9 @@ Item {
   // A suggestion: play the song (or a station from it, when the plan can't
   // play it on demand), or open the artist.
   function pickSuggestion(item) {
-    if (item.kind === "artist")
+    if (item.kind === "show")
+      showShow(item.key, item.name)
+    else if (item.kind === "artist")
       showArtist(item.id, item.name)
     else if (item.playable)
       root.player.playOnDemand(item.albumId || item.id, item.id)
@@ -418,10 +454,10 @@ Item {
 
         Repeater {
           model: [
-            { key: "now", label: "Now Playing" },
-            { key: "collection", label: "Music" },
+            { key: "discover", label: "Discover" },
             { key: "browse", label: "Browse" },
-            { key: "discover", label: "Discover" }
+            { key: "collection", label: "Music" },
+            { key: "podcasts", label: "Podcasts" }
           ]
           delegate: Item {
             required property var modelData
@@ -507,7 +543,7 @@ Item {
           Label {
             anchors.verticalCenter: parent.verticalCenter
             visible: stationSearch.text.length === 0
-            text: "Search artists, songs, stations"
+            text: root.section === "podcasts" ? "Search podcasts, or paste a feed's address" : "Search artists, songs, stations"
             color: root.theme.faint
             font.pixelSize: Style.font.body
           }
@@ -669,8 +705,10 @@ Item {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-              if (root.player.onDemand && root.queuePage === "next")
+              if (root.player.stepsThrough && root.queuePage === "next")
                 root.player.playOnDemand(root.player.sourceId, modelData.id)
+              else if (modelData.kind === "episode")
+                root.player.playEpisode(modelData.show, modelData.id)
               else
                 root.showAlbum(modelData.albumId || "", modelData.album || "", modelData.artist || "")
             }
@@ -721,7 +759,9 @@ Item {
         wrapMode: Text.WordWrap
         text: {
           if (root.queuePage === "history")
-            return "Songs you've heard show up here."
+            return root.player.isPodcast ? "Episodes you've listened to show up here." : "Songs you've heard show up here."
+          if (root.player.isPodcast)
+            return "No more new episodes. Follow shows, and theirs line up here."
           if (root.player.onDemand)
             return root.player.sourceKind === "playlist" ? "That's the end of the playlist." : "That's the end of the album."
           return "Up next fills in when something is playing."
@@ -849,7 +889,9 @@ Item {
               case "loading": return ""
               case "idle": return "Play something, and " + root.agentName + " will suggest music like it."
               case "error": return root.aiErrors[root.aiKey] || ""
-              default: return "Asking " + root.agentName + " for music like “" + root.player.title + "”…"
+              default: return root.player.isPodcast
+                ? "Asking " + root.agentName + " for podcasts like “" + root.player.artist + "”…"
+                : "Asking " + root.agentName + " for music like “" + root.player.title + "”…"
               }
             }
           }
@@ -1021,11 +1063,13 @@ Item {
           MouseArea {
             id: sourceArea
             anchors.fill: parent
-            enabled: root.player.onDemand && (root.player.sourceKind === "album" || root.player.sourceKind === "playlist")
+            enabled: root.player.isPodcast || root.player.onDemand && (root.player.sourceKind === "album" || root.player.sourceKind === "playlist")
             hoverEnabled: true
             cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
             onClicked: {
-              if (root.player.sourceKind === "album")
+              if (root.player.isPodcast)
+                root.showShow(root.player.showKey, root.player.artist)
+              else if (root.player.sourceKind === "album")
                 root.showAlbum(root.player.sourceId, root.player.sourceLabel, root.player.artist)
               else
                 root.showPlaylist(root.player.sourceId, root.player.sourceLabel)
@@ -1100,7 +1144,12 @@ Item {
             width: Math.min(implicitWidth, creditRow.cap)
             text: root.player.artist
             font.pixelSize: Math.round(Style.font.subtitle * stage.textFit)
-            onClicked: root.showArtist(root.player.artistId, root.player.artist)
+            onClicked: {
+              if (root.player.isPodcast)
+                root.showShow(root.player.showKey, root.player.artist)
+              else
+                root.showArtist(root.player.artistId, root.player.artist)
+            }
           }
 
           Label {
@@ -1194,11 +1243,11 @@ Item {
             x: transport.step * 1
             anchors.verticalCenter: parent.verticalCenter
             // Radio rates songs; on demand there is a previous track instead.
-            icon: root.player.onDemand ? "󰒮" : (root.player.rating === 2 ? "󰔑" : "󰔒")
-            active: !root.player.onDemand && root.player.rating === 2
-            enabled: root.player.onDemand ? root.player.canGoBack : root.player.canRate
+            icon: root.player.stepsThrough ? "󰒮" : (root.player.rating === 2 ? "󰔑" : "󰔒")
+            active: !root.player.stepsThrough && root.player.rating === 2
+            enabled: root.player.stepsThrough ? root.player.canGoBack : root.player.canRate
             fontFamily: root.fontFamily
-            onActivated: root.player.onDemand ? root.player.previous() : root.player.thumbDown()
+            onActivated: root.player.stepsThrough ? root.player.previous() : root.player.thumbDown()
           }
 
           IconButton {
@@ -1207,10 +1256,11 @@ Item {
             iconSize: transport.glyph
             x: transport.step * 2
             anchors.verticalCenter: parent.verticalCenter
-            icon: "󰦛"
+            // A podcast goes back 15 seconds instead.
+            icon: root.player.isPodcast ? "󱥆" : "󰦛"
             enabled: root.player.canReplay
             fontFamily: root.fontFamily
-            onActivated: root.player.replay()
+            onActivated: root.player.isPodcast ? root.player.skip(-15) : root.player.replay()
           }
 
           IconButton {
@@ -1231,10 +1281,12 @@ Item {
             iconSize: transport.glyph
             x: transport.step * 4
             anchors.verticalCenter: parent.verticalCenter
-            icon: "󰒭"
-            enabled: root.player.canGoNext
+            // A podcast goes ahead 30 seconds here, and on to the next episode
+            // where the thumbs up would be.
+            icon: root.player.isPodcast ? "󰴆" : "󰒭"
+            enabled: root.player.isPodcast ? root.player.canSeek : root.player.canGoNext
             fontFamily: root.fontFamily
-            onActivated: root.player.next()
+            onActivated: root.player.isPodcast ? root.player.skip(30) : root.player.next()
           }
 
           IconButton {
@@ -1243,11 +1295,11 @@ Item {
             iconSize: transport.glyph
             x: transport.step * 5
             anchors.verticalCenter: parent.verticalCenter
-            icon: root.player.liked ? "󰔓" : "󰔔"
-            active: root.player.liked
-            enabled: root.player.canLike
+            icon: root.player.isPodcast ? "󰒭" : (root.player.liked ? "󰔓" : "󰔔")
+            active: !root.player.isPodcast && root.player.liked
+            enabled: root.player.isPodcast ? root.player.canGoNext : root.player.canLike
             fontFamily: root.fontFamily
-            onActivated: root.player.thumbUp()
+            onActivated: root.player.isPodcast ? root.player.next() : root.player.thumbUp()
           }
 
           IconButton {
@@ -1503,7 +1555,6 @@ Item {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
               root.accountOpen = false
-              root.showNow()
               root.engine.signOut()
             }
           }
@@ -1512,7 +1563,7 @@ Item {
     }
 
     // The "more" menu: radio from this song or its artist, and on radio,
-    // tired of this song.
+    // tired of this song; for an episode, its show, or done with it.
     Rectangle {
       visible: root.moreOpen
       x: Math.min(parent.width - width - Style.space(8), root.moreAt.x - width)
@@ -1545,11 +1596,26 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
 
         MoreItem {
+          visible: !root.player.isPodcast
           label: songRadio.text
           onPicked: root.player.radioFrom(root.player.trackId, root.player.title)
         }
         MoreItem {
-          visible: root.player.artistId !== ""
+          visible: root.player.isPodcast
+          label: "Go to the show"
+          onPicked: root.showShow(root.player.showKey, root.player.artist)
+        }
+        MoreItem {
+          visible: root.player.isPodcast
+          label: "Mark played"
+          onPicked: {
+            root.engine.request("markPlayed", { id: root.player.trackId, played: true })
+            if (root.player.canGoNext)
+              root.player.next()
+          }
+        }
+        MoreItem {
+          visible: !root.player.isPodcast && root.player.artistId !== ""
           label: artistRadio.text
           onPicked: root.player.radioFrom(root.player.artistId, root.player.artist)
         }

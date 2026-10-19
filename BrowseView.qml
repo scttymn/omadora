@@ -1,10 +1,10 @@
 import QtQuick
 import qs.Commons
 
-// The full player's pages: Music, Browse, search results, an
-// artist, an album, or a playlist, from Pandora's catalog through the
-// engine. Albums, playlists, and songs play on demand when the account
-// allows; otherwise they start a radio station.
+// The full player's pages: Music, Browse, Podcasts, search results, an
+// artist, an album, a playlist, or a show, through the engine. Albums,
+// playlists, and songs play on demand when the account allows; otherwise
+// they start a radio station.
 Item {
   id: root
 
@@ -13,9 +13,11 @@ Item {
   required property var theme
   property string fontFamily: Style.font.family
 
-  // {kind: "collection" | "browse" | "search" | "artist" | "album" | "playlist",
-  //  id, name, artist, query, path}. A browse page with neither path nor id
-  //  is Browse itself; a path is a section's full list, an id a mood.
+  // {kind: "collection" | "browse" | "podcasts" | "podcastSearch" | "show" |
+  //  "search" | "artist" | "album" | "playlist", id, key, name, artist, query,
+  //  path}. A browse page with neither path nor id is Browse itself; a path
+  //  is a section's full list, an id a mood. A show's key is its Pandora id
+  //  or its feed's address.
   property var page: ({ kind: "search" })
   property var localStations: []
   property bool canGoBack: false
@@ -30,20 +32,28 @@ Item {
   property var loaded: null
   property string loadedKey: ""
   property string loadError: ""
-  readonly property string key: page.kind + "|" + (page.id || page.path || page.query || ((page.artist || "") + "/" + (page.name || "")))
+  readonly property string key: page.kind + "|" + (page.id || page.key || page.path || page.query || ((page.artist || "") + "/" + (page.name || "")))
   // Only data fetched for this page; never the last page's while it loads.
   readonly property var info: loadedKey === key ? loaded : null
   readonly property bool loading: info === null && loadError === ""
 
   onKeyChanged: load()
-  onVisibleChanged: if (visible && info === null) load()
+  onVisibleChanged: if (visible) load()
   Component.onCompleted: load()
 
-  // The engine answers before it has signed in; wait for that.
+  // Pages read fresh this session; the rest show what was saved, and read
+  // again when they can.
+  property var live: ({})
+
+  // Connected, then signed in: what was saved shows, then fresh pages.
   Connections {
     target: root.engine
+    function onOnlineChanged() {
+      if (root.engine.online && root.visible)
+        root.load()
+    }
     function onSignedInChanged() {
-      if (root.engine.signedIn && root.visible && root.info === null)
+      if (root.engine.signedIn && root.visible)
         root.load()
     }
   }
@@ -81,39 +91,67 @@ Item {
     }
   }
 
+  // An episode ended or started: its place in the lists is out of date.
+  Connections {
+    target: root.player
+    function onTrackIdChanged() {
+      if (root.page && (root.page.kind === "podcasts" || root.page.kind === "show"))
+        root.load()
+    }
+  }
+
   function load() {
     if (!visible)
       return
     var k = key
     loadError = ""
-    // Music shows what it had at once, and reads it again: it
-    // changes from everywhere.
+    // Music, Podcasts, and a show show what they had at once, and read it
+    // again: they change from everywhere.
+    var changing = page.kind === "collection" || page.kind === "podcasts" || page.kind === "show"
     if (cache[k]) {
       loaded = cache[k]
       loadedKey = k
-      if (page.kind !== "collection")
+      if (!changing && live[k])
         return
     }
-    if (!engine.signedIn)
+    // The tabs' pages and shows can come from what the engine saved before
+    // signing in; anything else waits for it.
+    var saved = page.kind === "collection" || page.kind === "podcasts" || page.kind === "show" || page.kind === "browse"
+    if (!engine.signedIn && !saved)
       return
-    var done = function (ok, result) {
+    // `fresh` is false for a saved answer, which a fresh one replaces.
+    var done = function (ok, result, fresh) {
       if (k !== root.key)
         return
       if (!ok) {
-        root.loadError = String(result)
+        // Something already showing stays; there's nothing to report.
+        if (root.loadedKey !== k)
+          root.loadError = String(result)
         return
+      }
+      if (fresh !== false) {
+        var seen = Object.assign({}, root.live)
+        seen[k] = true
+        root.live = seen
       }
       var next = Object.assign({}, root.cache)
       next[k] = result
       root.cache = next
       root.loaded = result
       root.loadedKey = k
+      root.loadError = ""
     }
     var p = page
     if (p.kind === "collection") {
       loadCollection(done)
+    } else if (p.kind === "podcasts") {
+      loadPodcasts(done)
+    } else if (p.kind === "podcastSearch") {
+      engine.request("podcastSearch", { query: p.query }, done)
+    } else if (p.kind === "show") {
+      engine.requestPage("podcast", { key: p.key }, done)
     } else if (p.kind === "browse") {
-      engine.request("browse", { path: p.path || "", id: p.id || "" }, done)
+      engine.requestPage("browse", { path: p.path || "", id: p.id || "" }, done)
     } else if (p.kind === "search") {
       engine.request("search", { query: p.query }, done)
     } else if (p.id) {
@@ -128,30 +166,105 @@ Item {
     }
   }
 
-  // The playlists and the collection's artists; the stations are the
-  // player's own list, always up to date.
-  function loadCollection(done) {
+  // A page made of several answers, shown as they arrive, saved or fresh.
+  // `parts` are {name, cmd, optional}; an optional part (trending) can fail
+  // without failing the page. The page is fresh once every part is.
+  function loadParts(parts, combine, done) {
     var got = {}
+    var fresh = {}
     var failed = ""
-    var waiting = 2
-    var finish = function () {
-      if (--waiting > 0)
-        return
-      if (failed !== "" && !got.playlists && !got.artists)
-        done(false, failed)
+    parts.forEach(function (part) {
+      engine.requestPage(part.cmd, {}, function (ok, result, isFresh) {
+        if (isFresh)
+          fresh[part.name] = true
+        if (ok)
+          got[part.name] = result
+        else if (!part.optional)
+          failed = String(result)
+        var allFresh = parts.every(function (p) { return fresh[p.name] })
+        var any = parts.some(function (p) { return !p.optional && got[p.name] !== undefined })
+        if (any)
+          done(true, combine(got), allFresh)
+        else if (allFresh && failed !== "")
+          done(false, failed, true)
+      })
+    })
+  }
+
+  // The playlists and the collection's artists; the stations are the
+  // player's own list.
+  function loadCollection(done) {
+    loadParts([{ name: "playlists", cmd: "playlists" }, { name: "artists", cmd: "collectionArtists" }], function (got) {
+      return { playlists: got.playlists || [], artists: got.artists || [] }
+    }, done)
+  }
+
+  // Your shows and their newest episodes, and what's trending (which may
+  // fail on its own without spoiling the rest).
+  function loadPodcasts(done) {
+    loadParts([{ name: "mine", cmd: "podcasts" }, { name: "trending", cmd: "podcastTrending", optional: true }], function (got) {
+      return Object.assign({ subscriptions: [], latest: [] }, got.mine || {}, { trending: got.trending || [] })
+    }, done)
+  }
+
+  // Shows as tiles.
+  function showTiles(list) {
+    return (list || []).map(function (s) {
+      return { kind: "show", id: s.key, key: s.key, title: s.title || "", detail: s.author || "", art: s.art || "" }
+    })
+  }
+
+  function playEpisode(episode) {
+    player.playEpisode(episode.show, episode.id)
+  }
+
+  // Played, or not, from its row; the page reads again to show it.
+  function markPlayed(episode, played) {
+    engine.request("markPlayed", { id: episode.id, played: played }, function (ok) {
+      if (ok)
+        root.load()
+    })
+  }
+
+  // Follow a show, or stop, from its page or by its feed's address.
+  property string subscribeError: ""
+  function subscribe(key, add, then) {
+    subscribeError = ""
+    engine.request("subscribe", { key: key, add: add }, function (ok, result) {
+      if (!ok)
+        root.subscribeError = String(result)
       else
-        done(true, { playlists: got.playlists || [], artists: got.artists || [] })
-    }
-    engine.request("playlists", {}, function (ok, result) {
-      if (ok) got.playlists = result
-      else failed = String(result)
-      finish()
+        root.load()
+      if (then)
+        then(ok)
     })
-    engine.request("collectionArtists", {}, function (ok, result) {
-      if (ok) got.artists = result
-      else failed = String(result)
-      finish()
-    })
+  }
+
+  function episodeDate(seconds) {
+    if (!seconds)
+      return ""
+    var d = new Date(seconds * 1000)
+    return Qt.formatDate(d, d.getFullYear() === new Date().getFullYear() ? "MMM d" : "MMM d, yyyy")
+  }
+
+  function minutes(seconds) {
+    var m = Math.max(1, Math.round(seconds / 60))
+    return m >= 60 ? Math.floor(m / 60) + " hr " + (m % 60) + " min" : m + " min"
+  }
+
+  // When, and how long (or how much is left, or that it's done).
+  function episodeMeta(e, withShow) {
+    var parts = []
+    if (withShow && e.artist)
+      parts.push(e.artist)
+    parts.push(episodeDate(e.published))
+    if (e.played)
+      parts.push("Played")
+    else if (e.position > 30 && e.duration)
+      parts.push(minutes(e.duration - e.position) + " left")
+    else if (e.duration)
+      parts.push(minutes(e.duration))
+    return parts.filter(function (s) { return s }).join("  ·  ")
   }
 
   function resolve(p, then) {
@@ -217,6 +330,8 @@ Item {
       root.open({ kind: "playlist", id: item.id, name: item.title })
     else if (item.kind === "category")
       root.open({ kind: "browse", id: item.id, name: item.title })
+    else if (item.kind === "show")
+      root.open({ kind: "show", key: item.key, name: item.title })
     else if (item.kind === "mine")
       root.stationPicked(item.station)
     else if (item.kind === "shuffle")
@@ -736,6 +851,98 @@ Item {
     }
   }
 
+  // An episode: its art, title, when and how long, and a line about it.
+  // Picking it plays it; hovering offers to mark it played or not.
+  component EpisodeRow: Rectangle {
+    id: episodeRow
+    property var episode: ({})
+    // The show's name too, where episodes of several shows are listed.
+    property bool withShow: false
+    readonly property bool current: root.player.isPodcast && root.player.trackId === episode.id
+    signal picked()
+
+    width: parent ? parent.width : 0
+    height: Math.max(episodeArt.height, episodeText.implicitHeight) + Style.space(20)
+    radius: Style.cornerRadius
+    color: current ? root.theme.raised : (episodeHover.hovered ? Util.alpha(root.theme.raised, 0.6) : "transparent")
+
+    ArtMark {
+      id: episodeArt
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(10)
+      anchors.top: parent.top
+      anchors.topMargin: Style.space(10)
+      width: Style.space(56)
+      height: width
+      rings: false
+      art: root.theme.art
+      artUrl: episodeRow.episode.art || ""
+    }
+
+    Column {
+      id: episodeText
+      anchors.left: episodeArt.right
+      anchors.leftMargin: Style.space(14)
+      anchors.right: markButton.left
+      anchors.rightMargin: Style.space(8)
+      anchors.top: parent.top
+      anchors.topMargin: Style.space(10)
+      spacing: Style.space(3)
+
+      Label {
+        width: parent.width
+        text: episodeRow.episode.title || ""
+        color: episodeRow.current ? root.theme.accent : (episodeRow.episode.played ? root.theme.muted : root.theme.strong)
+        font.pixelSize: Style.font.body
+        font.bold: episodeRow.current
+        wrapMode: Text.WordWrap
+        maximumLineCount: 2
+      }
+
+      Label {
+        width: parent.width
+        text: root.episodeMeta(episodeRow.episode, episodeRow.withShow)
+        color: root.theme.muted
+        font.pixelSize: Style.font.caption
+      }
+
+      Label {
+        width: parent.width
+        visible: text !== ""
+        text: episodeRow.episode.summary || ""
+        color: root.theme.faint
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+        maximumLineCount: 2
+      }
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: episodeRow.picked()
+    }
+
+    HoverHandler {
+      id: episodeHover
+    }
+
+    IconButton {
+      id: markButton
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(6)
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(30)
+      opacity: episodeHover.hovered ? 1 : 0
+      theme: root.theme
+      icon: episodeRow.episode.played ? "󰄬" : "󰄱"
+      active: episodeRow.episode.played === true
+      iconSize: Style.font.body
+      fontFamily: root.fontFamily
+      onActivated: root.markPlayed(episodeRow.episode, !episodeRow.episode.played)
+    }
+  }
+
   // Big art, a caption, a title, and whatever is declared inside it.
   component Header: Row {
     id: header
@@ -932,6 +1139,281 @@ Item {
         }
       }
 
+      // ---- Podcasts: your shows, their new episodes, what's trending, and
+      // a show added by its feed's address
+
+      Loader {
+        width: parent.width
+        active: root.page.kind === "podcasts" && root.info !== null
+        visible: active
+        sourceComponent: Column {
+          id: podcastsPage
+          width: parent ? parent.width : 0
+          property bool adding: false
+          property bool trendingOpen: false
+
+          Item {
+            width: parent.width
+            height: podcastsTitle.height
+
+            Label {
+              id: podcastsTitle
+              width: parent.width - addLink.width - Style.space(12)
+              text: "Podcasts"
+              color: root.theme.strong
+              font.pixelSize: Style.font.display
+              font.bold: true
+            }
+
+            Link {
+              id: addLink
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: podcastsPage.adding ? "Cancel" : "󰑫  Add a feed"
+              idle: root.theme.muted
+              font.pixelSize: Style.font.bodySmall
+              onClicked: {
+                podcastsPage.adding = !podcastsPage.adding
+                root.subscribeError = ""
+                if (podcastsPage.adding)
+                  feedInput.forceActiveFocus()
+              }
+            }
+          }
+
+          // A show by its RSS feed's address, whether or not any directory
+          // lists it.
+          Row {
+            visible: podcastsPage.adding
+            topPadding: Style.space(16)
+            spacing: Style.space(10)
+            width: parent.width
+
+            Rectangle {
+              width: parent.width - addButton.width - parent.spacing
+              height: Style.space(38)
+              radius: Style.cornerRadius
+              color: root.theme.surface
+              border.color: feedInput.activeFocus ? root.theme.accent : root.theme.border
+              border.width: 1
+
+              TextInput {
+                id: feedInput
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+                clip: true
+                color: root.theme.fg
+                selectionColor: root.theme.accent
+                selectedTextColor: root.theme.accentText
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                selectByMouse: true
+                onAccepted: if (addButton.enabled) addButton.activated()
+                Keys.onEscapePressed: podcastsPage.adding = false
+
+                Label {
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: feedInput.text.length === 0
+                  text: "https://example.com/feed.xml"
+                  color: root.theme.faint
+                  font.pixelSize: Style.font.body
+                }
+              }
+            }
+
+            Button {
+              id: addButton
+              property bool busy: false
+              label: busy ? "Adding…" : "Add"
+              enabled: !busy && feedInput.text.trim() !== ""
+              onActivated: {
+                busy = true
+                root.subscribe(feedInput.text.trim(), true, function (ok) {
+                  addButton.busy = false
+                  if (ok) {
+                    feedInput.text = ""
+                    podcastsPage.adding = false
+                  }
+                })
+              }
+            }
+          }
+
+          Note {
+            visible: root.subscribeError !== ""
+            topPadding: Style.space(12)
+            text: root.subscribeError
+          }
+
+          Shelf {
+            title: "Your shows"
+            items: root.showTiles(root.info.subscriptions)
+          }
+
+          Note {
+            visible: (root.info.subscriptions || []).length === 0
+            topPadding: Style.space(16)
+            text: "Follow shows to see their new episodes here. Search for one above, or add one by its feed's address."
+          }
+
+          Heading {
+            visible: (root.info.latest || []).length > 0
+            text: "New episodes"
+          }
+
+          Repeater {
+            model: root.info.latest || []
+            delegate: EpisodeRow {
+              required property var modelData
+              episode: modelData
+              withShow: true
+              onPicked: root.playEpisode(modelData)
+            }
+          }
+
+          Shelf {
+            title: "Trending"
+            items: root.showTiles(root.info.trending)
+            rows: podcastsPage.trendingOpen ? 0 : 2
+            onMoreRequested: podcastsPage.trendingOpen = true
+          }
+
+          Note {
+            visible: (root.info.trending || []).length > 0
+            topPadding: Style.space(12)
+            text: "Trending on Apple Podcasts."
+          }
+        }
+      }
+
+      // ---- podcast search: shows from Pandora and the directories
+
+      Loader {
+        width: parent.width
+        active: root.page.kind === "podcastSearch" && root.info !== null
+        visible: active
+        sourceComponent: Column {
+          width: parent ? parent.width : 0
+
+          Label {
+            width: parent.width
+            text: "Shows for “" + root.page.query + "”"
+            color: root.theme.strong
+            font.pixelSize: Style.font.display
+            font.bold: true
+          }
+
+          Shelf {
+            items: root.showTiles(root.info)
+          }
+
+          Note {
+            visible: (root.info || []).length === 0
+            topPadding: Style.space(16)
+            text: "No shows match “" + root.page.query + "”. If you know its feed's address, paste that instead."
+          }
+        }
+      }
+
+      // ---- a show
+
+      Loader {
+        width: parent.width
+        active: root.page.kind === "show" && root.info !== null
+        visible: active
+        sourceComponent: Column {
+          id: showPage
+          width: parent ? parent.width : 0
+          readonly property var show: root.info
+          property int shown: 50
+          property bool aboutOpen: false
+
+          Header {
+            caption: showPage.show.source === "pandora" ? "Podcast  ·  Pandora" : "Podcast  ·  RSS"
+            title: showPage.show.title || root.page.name || ""
+            art: showPage.show.art || ""
+
+            Label {
+              width: parent.width
+              visible: text !== ""
+              text: showPage.show.author || ""
+              color: root.theme.fg
+              font.pixelSize: Style.font.subtitle
+            }
+
+            Label {
+              width: parent.width
+              text: root.count(showPage.show.count || 0, "episode", "episodes")
+              color: root.theme.muted
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(10)
+
+              Button {
+                visible: (showPage.show.episodes || []).length > 0
+                label: "Play latest"
+                glyph: "󰐊"
+                onActivated: root.playEpisode(showPage.show.episodes[0])
+              }
+
+              Button {
+                primary: false
+                label: showPage.show.subscribed ? "Following" : "Follow"
+                glyph: showPage.show.subscribed ? "󰄬" : "󰐕"
+                onActivated: root.subscribe(showPage.show.key, !showPage.show.subscribed)
+              }
+            }
+
+            Note {
+              visible: root.subscribeError !== ""
+              text: root.subscribeError
+            }
+          }
+
+          Label {
+            width: parent.width
+            visible: text !== ""
+            topPadding: Style.space(20)
+            text: showPage.show.description || ""
+            color: root.theme.fg
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+            maximumLineCount: showPage.aboutOpen ? 100 : 3
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: showPage.aboutOpen = !showPage.aboutOpen
+            }
+          }
+
+          Heading { text: "Episodes" }
+
+          Repeater {
+            model: (showPage.show.episodes || []).slice(0, showPage.shown)
+            delegate: EpisodeRow {
+              required property var modelData
+              episode: modelData
+              onPicked: root.playEpisode(modelData)
+            }
+          }
+
+          Link {
+            visible: (showPage.show.episodes || []).length > showPage.shown
+            topPadding: Style.space(16)
+            text: "Show more"
+            idle: root.theme.muted
+            font.pixelSize: Style.font.bodySmall
+            onClicked: showPage.shown += 50
+          }
+        }
+      }
+
+
       // ---- Browse: the page itself, a section's full list, or a mood
 
       Loader {
@@ -980,7 +1462,8 @@ Item {
         sourceComponent: Column {
           id: searchPage
           width: parent ? parent.width : 0
-          readonly property var found: root.info
+          // While pages swap, root.info can briefly be the next page's.
+          readonly property var found: root.info && root.info.tracks ? root.info : ({ tracks: [], artists: [], albums: [], playlists: [] })
 
           Label {
             width: parent.width
