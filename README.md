@@ -66,6 +66,11 @@ The agent is the one set in `~/.config/omadora/settings.toml`, else Omarchy's de
 agent = "claude"
 # What to suggest; Omadora adds what's playing and the answer's format.
 prompt = "Suggest 8 deep cuts from the same scene and decade, no hits."
+# A model for this, if not the agent's usual one (Claude Code, Codex, Grok,
+# Gemini, OpenCode, Copilot).
+model = "gpt-6-astra"
+# Reasoning effort (Claude Code, Codex, Grok). Omadora asks for low unless set.
+effort = "low"
 # Or any command instead of an agent: the prompt on stdin, the answer on stdout.
 # command = "my-llm --json"
 ```

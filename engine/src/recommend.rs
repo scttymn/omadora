@@ -9,6 +9,8 @@
 //! agent = "claude"        # one of AGENTS; overrides Omarchy's default
 //! command = "my-llm"      # or any command: prompt on stdin, answer on stdout
 //! prompt = "Suggest deep cuts from the same scene and decade."
+//! model = "gpt-6-astra"   # passed to agents that take one
+//! effort = "low"          # the default; for agents with reasoning effort
 //! ```
 //!
 //! `prompt` replaces DEFAULT_PROMPT, the part that says what to suggest.
@@ -131,24 +133,58 @@ pub fn set_agent(agent: &str) -> Result<Value> {
     Ok(agents())
 }
 
+/// Effort when `[ai] effort` is unset: song suggestions don't need an
+/// agent's deepest reasoning, and low is faster and lighter on a plan.
+const DEFAULT_EFFORT: &str = "low";
+
+/// A model or effort name from settings, passed as one argument. Anything
+/// that could read as a flag or carry junk is dropped.
+fn ident(value: Option<String>) -> Option<String> {
+    let v = value?;
+    let ok = v.len() <= 128
+        && v.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && v.chars().all(|c| c.is_ascii_alphanumeric() || "._:/+-".contains(c));
+    ok.then_some(v)
+}
+
 /// The command line for one headless question. Codex writes its final
 /// message to `answer`; the others print it.
-fn argv(agent: &str, prompt: &str, answer: &std::path::Path) -> Option<Vec<String>> {
+fn argv(agent: &str, prompt: &str, answer: &std::path::Path, model: Option<&str>, effort: Option<&str>) -> Option<Vec<String>> {
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let mut args = match agent {
-        "claude" => s(&["claude", "-p", "--output-format", "text", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch", "--"]),
-        "codex" => s(&["codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never", "-o"]),
-        "gemini" => s(&["gemini", "-p"]),
+        "claude" => s(&["claude", "-p", "--output-format", "text", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch"]),
+        "codex" => s(&["codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never"]),
+        "gemini" => s(&["gemini"]),
         "opencode" => s(&["opencode", "run"]),
-        "copilot" => s(&["copilot", "-p"]),
+        "copilot" => s(&["copilot"]),
         "crush" => s(&["crush", "run"]),
-        "grok" => s(&["grok", "-p"]),
-        "pi" => s(&["pi", "-p"]),
-        "omp" => s(&["omp", "-p"]),
+        "grok" => s(&["grok"]),
+        "pi" => s(&["pi"]),
+        "omp" => s(&["omp"]),
         _ => return None,
     };
-    if agent == "codex" {
-        args.push(answer.to_string_lossy().into_owned());
+    // Each CLI's own spelling of model and effort; agents without one skip it.
+    let (model_flag, effort_flag) = match agent {
+        "claude" => (Some("--model"), Some("--effort")),
+        "codex" => (Some("-m"), None),
+        "grok" => (Some("-m"), Some("--reasoning-effort")),
+        "gemini" | "opencode" | "copilot" => (Some("--model"), None),
+        _ => (None, None),
+    };
+    if let (Some(flag), Some(model)) = (model_flag, model) {
+        args.extend([flag.to_string(), model.to_string()]);
+    }
+    if let (Some(flag), Some(effort)) = (effort_flag, effort) {
+        args.extend([flag.to_string(), effort.to_string()]);
+    }
+    if let ("codex", Some(effort)) = (agent, effort) {
+        args.extend(["-c".to_string(), format!("model_reasoning_effort=\"{effort}\"")]);
+    }
+    match agent {
+        "codex" => args.extend(["-o".to_string(), answer.to_string_lossy().into_owned()]),
+        "claude" => args.push("--".into()),
+        "gemini" | "copilot" | "grok" | "pi" | "omp" => args.push("-p".into()),
+        _ => {}
     }
     args.push(prompt.to_string());
     Some(args)
@@ -275,7 +311,9 @@ pub fn recommend(pandora: &Pandora, state: &Value, fresh: bool) -> Result<Value>
         c.arg("-c").arg(command);
         run(c, Some(&question))?
     } else {
-        let args = argv(&choice.agent, &question, &answer_file).ok_or_else(|| anyhow!("Omadora doesn't know how to ask {name} yet."))?;
+        let model = ident(ai_setting("model"));
+        let effort = ident(ai_setting("effort")).or_else(|| Some(DEFAULT_EFFORT.to_string()));
+        let args = argv(&choice.agent, &question, &answer_file, model.as_deref(), effort.as_deref()).ok_or_else(|| anyhow!("Omadora doesn't know how to ask {name} yet."))?;
         if !installed(&args[0]) {
             bail!("{name} isn't installed.");
         }
@@ -351,10 +389,23 @@ mod tests {
     fn every_agent_puts_the_prompt_last() {
         let answer = std::path::Path::new("/tmp/a.txt");
         for (id, _) in AGENTS {
-            let args = argv(id, "PROMPT", answer).unwrap();
+            let args = argv(id, "PROMPT", answer, Some("m1"), Some("low")).unwrap();
             assert_eq!(args[0], id);
             assert_eq!(args.last().unwrap(), "PROMPT");
         }
-        assert!(argv("muse", "PROMPT", answer).is_none());
+        assert!(argv("muse", "PROMPT", answer, None, None).is_none());
+    }
+
+    #[test]
+    fn model_and_effort_use_each_agents_flags() {
+        let answer = std::path::Path::new("/tmp/a.txt");
+        let codex = argv("codex", "P", answer, Some("gpt-6-astra"), Some("low")).unwrap().join(" ");
+        assert!(codex.contains("-m gpt-6-astra") && codex.contains("-c model_reasoning_effort=\"low\""));
+        let claude = argv("claude", "P", answer, Some("haiku"), Some("low")).unwrap().join(" ");
+        assert!(claude.contains("--model haiku --effort low -- P"));
+        let crush = argv("crush", "P", answer, Some("x"), Some("low")).unwrap();
+        assert_eq!(crush, ["crush", "run", "P"]);
+        assert_eq!(ident(Some("--evil".into())), None);
+        assert_eq!(ident(Some("gpt-6-astra".into())).as_deref(), Some("gpt-6-astra"));
     }
 }
