@@ -351,8 +351,8 @@ mod tests {
 
     #[test]
     fn bio_keeps_artist_links_only() {
-        let html = r#"Ella Langley<span class="pull-single">’</span>s songs &amp; <a data-pandora-id="AR:398760" href="pandorav4:/x">Elle King</a>."#;
-        assert_eq!(clean_bio(html), r#"Ella Langley’s songs &amp; <a href="AR:398760">Elle King</a>."#);
+        let html = r#"The band<span class="pull-single">’</span>s songs &amp; <a data-pandora-id="AR:12345" href="pandorav4:/x">a friend</a>."#;
+        assert_eq!(clean_bio(html), r#"The band’s songs &amp; <a href="AR:12345">a friend</a>."#);
         assert_eq!(clean_bio("R&B and soul"), "R&amp;B and soul");
     }
 }

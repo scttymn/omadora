@@ -2,7 +2,13 @@
 
 Pandora in the Omarchy bar.
 
-The bar shows the Pandora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app: stations and playlists on the left, the track in the middle, up next and history on the right. The shrink control returns to the mini player. Colors come from the active Omarchy theme.
+> Omadora is an unofficial, personal project. It is not affiliated with,
+> endorsed by, or supported by Pandora Media or SiriusXM. It talks to
+> Pandora's unofficial APIs, which can change or stop working at any time,
+> and it needs your own Pandora account. Pandora is a trademark of Pandora
+> Media, LLC; the Omadora lettering is a nod to its wordmark.
+
+The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app: stations and playlists on the left, the track in the middle, up next and history on the right. The shrink control returns to the mini player. Colors come from the active Omarchy theme.
 
 `omadora-engine` (in `engine/`) plays everything: your radio stations, Shuffle, and albums, playlists, and songs on demand. It also serves the catalog: search, artist pages, albums, and playlists. On demand, the controls are previous, replay, play, and next. On radio they are thumbs, replay, play, skip, tired, and the station's modes, within what Pandora allows for each song. Drag the progress bar to scrub wherever replays are allowed. Volume is the system output.
 
