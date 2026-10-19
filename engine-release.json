@@ -1,7 +1,7 @@
 {
-  "version": "0.3.4",
+  "version": "0.3.5",
   "sha256": {
-    "x86_64": "759df3fb6449dcf535b539a16203d531a8b3d413c423cfe1c3d4b780f14f0585",
-    "aarch64": "1839830a71980ee1efdc2efa91fa7f2a46caf313dfd37bd5480816697655042f"
+    "x86_64": "a5824288bc68b8d30b1aff84ec1a168e2532a304ab1ba43d4cfc182f3d007fb8",
+    "aarch64": "38a01cb587ad18afd639f6405e9ffcb5e85763829f1e480e5efbd45de3fa44f7"
   }
 }
