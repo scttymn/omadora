@@ -71,19 +71,6 @@ Open the player and sign in with your Pandora email and password. The engine che
 
 Any Pandora account works: free accounts get radio, and Plus and Premium add what Pandora gives them (replays, skips, albums and playlists on demand).
 
-For a setup without a keyring, the engine also reads pianobar's config when no account has been saved from the player:
-
-```text
-~/.config/omadora/pianobar/config
-```
-
-```text
-user = you@example.com
-password_command = secret-tool lookup service pandora
-```
-
-(`password = …` works in place of `password_command`; keep the file mode 600.)
-
 The engine listens on `$XDG_RUNTIME_DIR/omadora/engine.sock` and keeps its session beside it; [engine/README.md](engine/README.md) has its protocol and how it signs in.
 
 ## Development

@@ -17,9 +17,8 @@ cargo build --release
 Pandora's web login sits behind a bot check, so the engine signs in through
 the device API instead, the way pianobar does. The account comes from the
 widget's sign-in form (`signIn`), which saves the password in the system
-keyring through `secret-tool` and the email in `~/.config/omadora/account`;
-without one, the engine reads `~/.config/omadora/pianobar/config`. With
-neither, state `needsAccount` is true and the engine waits. The web API at `www.pandora.com/api`
+keyring through `secret-tool` and the email in `~/.config/omadora/account`.
+Without a saved account, state `needsAccount` is true and the engine waits. The web API at `www.pandora.com/api`
 accepts that sign-in's token, and it has the catalog, playlists, and
 on-demand audio. Nothing here pretends to be a browser. This relies on
 Pandora's unofficial APIs, which they can change. Plays are reported the

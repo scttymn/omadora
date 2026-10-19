@@ -45,11 +45,6 @@ fn account_path() -> PathBuf {
     config_dir().join("account")
 }
 
-/// pianobar's config, for anyone who set Omadora up by hand.
-fn pianobar_path() -> PathBuf {
-    config_dir().join("pianobar").join("config")
-}
-
 fn setting(text: &str, name: &str) -> Option<String> {
     text.lines()
         .filter_map(|line| line.split_once('='))
@@ -65,44 +60,18 @@ fn keyring_entry(user: &str) -> [&str; 4] {
 
 /// The email of the saved account, if there is one.
 pub fn saved_user() -> Option<String> {
-    let own = fs::read_to_string(account_path()).ok().and_then(|t| setting(&t, "user"));
-    own.or_else(|| fs::read_to_string(pianobar_path()).ok().and_then(|t| setting(&t, "user")))
+    fs::read_to_string(account_path()).ok().and_then(|t| setting(&t, "user"))
 }
 
-/// The account's email and password: the one signed in from the widget, or
-/// else the one in pianobar's config.
+/// The saved account's email and password.
 pub fn credentials() -> Result<(String, String)> {
-    if let Some(user) = fs::read_to_string(account_path()).ok().and_then(|t| setting(&t, "user")) {
-        let out = Command::new("secret-tool").arg("lookup").args(keyring_entry(&user)).output();
-        let password = out.ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
-        if password.is_empty() {
-            // The keyring lost it (or is locked); ask again.
-            bail!(NO_ACCOUNT);
-        }
-        return Ok((user, password));
+    let Some(user) = saved_user() else { bail!(NO_ACCOUNT) };
+    let out = Command::new("secret-tool").arg("lookup").args(keyring_entry(&user)).output();
+    let password = out.ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
+    if password.is_empty() {
+        // The keyring lost it (or is locked); ask again.
+        bail!(NO_ACCOUNT);
     }
-    let path = pianobar_path();
-    let Ok(text) = fs::read_to_string(&path) else { bail!(NO_ACCOUNT) };
-    let (mut user, mut password, mut command) = (None, None, None);
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once('=') else { continue };
-        let value = value.trim().to_string();
-        match key.trim() {
-            "user" => user = Some(value),
-            "password" => password = Some(value),
-            "password_command" => command = Some(value),
-            _ => {}
-        }
-    }
-    let password = match (password, command) {
-        (Some(p), _) => p,
-        (None, Some(cmd)) => {
-            let out = Command::new("sh").arg("-c").arg(&cmd).output()?;
-            String::from_utf8(out.stdout)?.lines().next().unwrap_or("").to_string()
-        }
-        (None, None) => bail!("no password in {}", path.display()),
-    };
-    let user = user.ok_or_else(|| anyhow!("no user in {}", path.display()))?;
     Ok((user, password))
 }
 
@@ -169,8 +138,7 @@ fn remember(user: &str, password: &str) -> Result<()> {
     Ok(())
 }
 
-/// Sign out: forget the saved account and the session. pianobar's config,
-/// if there is one, is left alone.
+/// Sign out: forget the saved account and the session.
 pub fn forget() {
     let _ = Command::new("secret-tool").args(["clear", "application", "omadora"]).output();
     let _ = fs::remove_file(account_path());
