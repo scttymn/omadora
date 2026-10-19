@@ -998,9 +998,156 @@ Item {
 
   // ---- the page
 
+  // ---- Podcasts' new episodes, in a column of their own beside the page,
+  // as Discover's headlines are
+
+  readonly property var newEpisodes: page.kind === "podcasts" && info !== null ? (info.latest || []) : []
+
+  Item {
+    id: episodeRail
+    visible: root.newEpisodes.length > 0
+    anchors.top: parent.top
+    anchors.topMargin: Style.space(20)
+    anchors.bottom: parent.bottom
+    anchors.right: parent.right
+    anchors.rightMargin: Style.space(28)
+    width: Math.max(Style.space(260), Math.min(Style.space(360), parent.width * 0.3))
+
+    Rectangle {
+      anchors.left: parent.left
+      anchors.leftMargin: -Style.space(14)
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      width: 1
+      color: root.theme.surface
+    }
+
+    Label {
+      id: railHeading
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(4)
+      text: "New episodes"
+      color: root.theme.faint
+      font.pixelSize: Style.font.bodySmall
+      font.bold: true
+      font.capitalization: Font.AllUppercase
+      font.letterSpacing: 1.6
+    }
+
+    ListView {
+      id: railList
+      anchors.top: railHeading.bottom
+      anchors.topMargin: Style.space(12)
+      anchors.bottom: parent.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.leftMargin: Style.space(4)
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      model: root.newEpisodes
+
+      delegate: Item {
+        id: railEpisode
+        required property var modelData
+        readonly property bool current: root.player.isPodcast && root.player.trackId === modelData.id
+        width: railList.width
+        height: Math.max(railArt.height, railText.implicitHeight) + Style.space(16)
+
+        HoverHandler {
+          id: railHover
+        }
+
+        // The show's art, to find it at a glance.
+        ArtMark {
+          id: railArt
+          anchors.left: parent.left
+          anchors.top: parent.top
+          anchors.topMargin: Style.space(2)
+          width: Style.space(44)
+          height: width
+          rings: false
+          art: root.theme.art
+          artUrl: railEpisode.modelData.art || ""
+        }
+
+        Column {
+          id: railText
+          anchors.left: railArt.right
+          anchors.leftMargin: Style.space(12)
+          anchors.right: parent.right
+          spacing: Style.space(6)
+
+          // The show, when, and how long (or what's left), as Discover's
+          // headlines name their magazine; with a mark for played.
+          Item {
+            width: parent.width
+            height: railMeta.implicitHeight
+
+            Label {
+              id: railMeta
+              anchors.left: parent.left
+              anchors.right: railMark.left
+              anchors.rightMargin: Style.space(6)
+              text: root.episodeMeta(railEpisode.modelData, true)
+              color: root.theme.accent
+              font.pixelSize: Style.font.caption
+              font.capitalization: Font.AllUppercase
+              font.letterSpacing: 1.1
+            }
+
+            IconButton {
+              id: railMark
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(24)
+              opacity: railHover.hovered ? 1 : 0
+              theme: root.theme
+              icon: railEpisode.modelData.played ? "󰄬" : "󰄱"
+              active: railEpisode.modelData.played === true
+              iconSize: Style.font.bodySmall
+              fontFamily: root.fontFamily
+              onActivated: root.markPlayed(railEpisode.modelData, !railEpisode.modelData.played)
+            }
+          }
+
+          Label {
+            width: parent.width
+            text: railEpisode.modelData.title || ""
+            color: railArea.containsMouse || railEpisode.current ? root.theme.accent : (railEpisode.modelData.played ? root.theme.muted : root.theme.strong)
+            font.pixelSize: Style.font.body
+            font.bold: true
+            wrapMode: Text.WordWrap
+            maximumLineCount: 3
+
+            MouseArea {
+              id: railArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.playEpisode(railEpisode.modelData)
+            }
+          }
+        }
+
+        Rectangle {
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: Style.space(4)
+          height: 1
+          color: root.theme.surface
+        }
+      }
+    }
+  }
+
   Flickable {
     id: scroller
-    anchors.fill: parent
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    anchors.left: parent.left
+    // Beside Podcasts' new episodes, when there are some.
+    anchors.right: episodeRail.visible ? episodeRail.left : parent.right
     contentHeight: content.height + Style.space(40)
     clip: true
     boundsBehavior: Flickable.StopAtBounds
@@ -1258,32 +1405,11 @@ Item {
             text: "Follow shows to see their new episodes here. Search for one above, or add one by its feed's address."
           }
 
-          Heading {
-            visible: (root.info.latest || []).length > 0
-            text: "New episodes"
-          }
-
-          Repeater {
-            model: root.info.latest || []
-            delegate: EpisodeRow {
-              required property var modelData
-              episode: modelData
-              withShow: true
-              onPicked: root.playEpisode(modelData)
-            }
-          }
-
           Shelf {
-            title: "Trending"
+            title: "Trending on Apple Podcasts"
             items: root.showTiles(root.info.trending)
             rows: podcastsPage.trendingOpen ? 0 : 2
             onMoreRequested: podcastsPage.trendingOpen = true
-          }
-
-          Note {
-            visible: (root.info.trending || []).length > 0
-            topPadding: Style.space(12)
-            text: "Trending on Apple Podcasts."
           }
         }
       }
