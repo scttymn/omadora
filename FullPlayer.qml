@@ -966,58 +966,69 @@ Item {
           return "asking"
         }
 
-        // Which agent answers, with which model and effort; each a menu
-        // when the agent lists its choices.
-        Flow {
+        // Which agent answers, with which model and effort (each a menu
+        // when the agent lists its choices), and ask again on the right.
+        Item {
           id: aiHeader
           visible: aiPanel.mode === "picks" || aiPanel.mode === "error" || aiPanel.mode === "asking" || aiPanel.mode === "idle"
           width: parent.width
-          spacing: Style.space(8)
+          height: Style.space(22)
 
-          Caption {
-            text: "From " + root.agentName
-            font.pixelSize: Style.font.caption
+          Row {
+            anchors.left: parent.left
+            anchors.right: askAgain.left
+            anchors.rightMargin: Style.space(8)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(8)
+            clip: true
+
+            Caption {
+              text: "From " + root.agentName
+              font.pixelSize: Style.font.caption
+            }
+            Caption {
+              visible: modelLink.visible || modelText.visible
+              text: "·"
+              font.pixelSize: Style.font.caption
+            }
+            LinkLabel {
+              id: modelLink
+              visible: root.hasAgent && root.agentInfo.models.length > 0
+              text: (root.agentInfo && root.agentInfo.modelName) || "default model"
+              font.pixelSize: Style.font.caption
+              onClicked: root.openAiMenu("model", modelLink)
+            }
+            Caption {
+              id: modelText
+              visible: root.hasAgent && root.agentInfo.models.length === 0 && !!root.agentInfo.modelName
+              text: (root.agentInfo && root.agentInfo.modelName) || ""
+              font.pixelSize: Style.font.caption
+            }
+            Caption {
+              visible: effortLink.visible
+              text: "·"
+              font.pixelSize: Style.font.caption
+            }
+            LinkLabel {
+              id: effortLink
+              visible: root.hasAgent && root.agentInfo.efforts.length > 0
+              text: (root.agentInfo && root.agentInfo.effort) || "default effort"
+              font.pixelSize: Style.font.caption
+              onClicked: root.openAiMenu("effort", effortLink)
+            }
           }
-          Caption {
-            visible: modelLink.visible || modelText.visible
-            text: "·"
-            font.pixelSize: Style.font.caption
-          }
-          LinkLabel {
-            id: modelLink
-            visible: root.hasAgent && root.agentInfo.models.length > 0
-            text: (root.agentInfo && root.agentInfo.modelName) || "default model"
-            font.pixelSize: Style.font.caption
-            onClicked: root.openAiMenu("model", modelLink)
-          }
-          Caption {
-            id: modelText
-            visible: root.hasAgent && root.agentInfo.models.length === 0 && !!root.agentInfo.modelName
-            text: (root.agentInfo && root.agentInfo.modelName) || ""
-            font.pixelSize: Style.font.caption
-          }
-          Caption {
-            visible: effortLink.visible
-            text: "·"
-            font.pixelSize: Style.font.caption
-          }
-          LinkLabel {
-            id: effortLink
-            visible: root.hasAgent && root.agentInfo.efforts.length > 0
-            text: (root.agentInfo && root.agentInfo.effort) || "default effort"
-            font.pixelSize: Style.font.caption
-            onClicked: root.openAiMenu("effort", effortLink)
-          }
-          Caption {
-            visible: aiPanel.mode === "picks"
-            text: "·"
-            font.pixelSize: Style.font.caption
-          }
-          LinkLabel {
-            visible: aiPanel.mode === "picks"
-            text: "ask again"
-            font.pixelSize: Style.font.caption
-            onClicked: root.askAi(true)
+
+          IconButton {
+            id: askAgain
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            visible: aiPanel.mode === "picks" || aiPanel.mode === "error"
+            theme: root.theme
+            icon: "󰑐"
+            width: visible ? Style.space(24) : 0
+            iconSize: Style.font.body
+            fontFamily: root.fontFamily
+            onActivated: root.askAi(true)
           }
         }
 
