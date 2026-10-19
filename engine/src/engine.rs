@@ -164,6 +164,9 @@ fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
+/// Queue the next track in the audio this many seconds before the end.
+const QUEUE_AHEAD: f64 = 8.0;
+
 // Fetch more radio when this many tracks or fewer are left.
 const RADIO_LOW_WATER: usize = 2;
 // Played radio tracks are dropped from the queue past this many.
@@ -202,6 +205,8 @@ struct Engine {
     // A restored station has not started this session; its first fetch
     // must say so.
     cold: bool,
+    // The next track, already queued in the audio to follow without a gap.
+    queued_next: Option<usize>,
     saved: String,
     last_save: Instant,
     clock: Clock,
@@ -242,6 +247,7 @@ pub fn start() -> anyhow::Result<Arc<Shared>> {
         resume_at: None,
         restored: false,
         cold: false,
+        queued_next: None,
         saved: String::new(),
         last_save: Instant::now(),
         clock: Clock::default(),
@@ -266,6 +272,17 @@ impl Engine {
     }
 
     fn tick(&mut self) {
+        if self.status == Status::Playing {
+            match self.queued_next {
+                // The queued track has taken over: carry on without reloading.
+                Some(next) if self.audio.loaded() <= 1 => {
+                    self.queued_next = None;
+                    self.carry_on(next);
+                }
+                Some(_) => {}
+                None => self.queue_next(),
+            }
+        }
         if self.status == Status::Playing && self.audio.finished() {
             self.advance(1, false);
         }
@@ -762,14 +779,46 @@ impl Engine {
             self.fail(format!("{e:#}"));
             return;
         }
-        self.audio_ready = true;
-        self.restored = false;
+        self.queued_next = None;
         // Resuming a restored session picks up where it left off.
         let start = self.resume_at.take().unwrap_or(0.0);
         if start > 0.0 {
             let _ = self.audio.seek(Duration::from_secs_f64(start));
         }
         self.audio.play();
+        self.started(index, loaded, start);
+    }
+
+    /// Near the end of a track, queue the next one in the audio so it
+    /// starts the instant this one ends: no polling gap, no reload.
+    fn queue_next(&mut self) {
+        let Some(index) = self.index else { return };
+        let Some(next) = self.queue.get(index + 1) else { return };
+        let Some(loaded) = self.cache.get(&cache_key(next)).cloned() else { return };
+        let length = self.current().and_then(|t| t["duration"].as_f64()).unwrap_or(0.0);
+        if length <= 0.0 || length - self.clock.at() > QUEUE_AHEAD {
+            return;
+        }
+        if self.audio.queue_next(loaded.bytes, &loaded.encoding, loaded.gain).is_ok() {
+            self.queued_next = Some(index + 1);
+        }
+    }
+
+    /// The queued track is playing now; catch the engine up.
+    fn carry_on(&mut self, index: usize) {
+        let Some(track) = self.queue.get(index).cloned() else { return };
+        let Some(loaded) = self.cache.get(&cache_key(&track)).cloned() else { return };
+        self.generation += 1;
+        self.error.clear();
+        // Noticed on the next tick, a moment in.
+        let at = self.audio.position().as_secs_f64().min(1.0);
+        self.started(index, loaded, at);
+    }
+
+    /// A track has started: the clock, the play report, what to fetch next.
+    fn started(&mut self, index: usize, loaded: Loaded, start: f64) {
+        self.audio_ready = true;
+        self.restored = false;
         self.clock.set(start, true);
         self.status = Status::Playing;
         self.index = Some(index);
@@ -933,6 +982,7 @@ impl Engine {
     fn stop_audio(&mut self) {
         self.audio.stop();
         self.audio_ready = false;
+        self.queued_next = None;
     }
 
     /// Put back what was playing when the engine last ran, paused. Radio

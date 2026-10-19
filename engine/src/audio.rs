@@ -1,4 +1,5 @@
-//! Audio output. One track at a time, decoded from memory so seeking and
+//! Audio output: the track playing, and the next one queued behind it near
+//! the end so they play without a gap. Decoded from memory, so seeking and
 //! replay need no network.
 //!
 //! `OMADORA_AUDIO=null` swaps the sound device for a sink that consumes
@@ -31,17 +32,28 @@ impl Audio {
 
     /// Replace whatever is playing with this track, paused at the start.
     pub fn load(&self, bytes: Arc<Vec<u8>>, encoding: &str, gain_db: f32) -> Result<()> {
-        let len = bytes.len() as u64;
-        let decoder = Decoder::builder()
-            .with_data(Cursor::new(SharedBytes(bytes)))
-            .with_byte_len(len)
-            .with_seekable(true)
-            .with_hint(if encoding.is_empty() { "mp3" } else { encoding })
-            .build()
-            .context("decoding the track")?;
+        let source = decode(bytes, encoding, gain_db)?;
         self.player.clear();
-        self.player.append(decoder.amplify(db_to_gain(gain_db)));
+        self.player.append(source);
         Ok(())
+    }
+
+    /// Queue a track to start the moment the one playing ends, with no gap:
+    /// albums that run one song into the next play as one piece.
+    pub fn queue_next(&self, bytes: Arc<Vec<u8>>, encoding: &str, gain_db: f32) -> Result<()> {
+        let source = decode(bytes, encoding, gain_db)?;
+        self.player.append(source);
+        Ok(())
+    }
+
+    /// Tracks loaded: the one playing plus any queued after it.
+    pub fn loaded(&self) -> usize {
+        self.player.len()
+    }
+
+    /// How far into the track playing now.
+    pub fn position(&self) -> Duration {
+        self.player.get_pos()
     }
 
     pub fn play(&self) {
@@ -78,6 +90,22 @@ impl Audio {
     pub fn volume(&self) -> f32 {
         self.player.volume() as f32
     }
+}
+
+/// A track decoded from memory, at its loudness. MP3's encoder delay and
+/// padding are trimmed (rodio's gapless decoding), so back-to-back tracks
+/// meet without a click of silence.
+fn decode(bytes: Arc<Vec<u8>>, encoding: &str, gain_db: f32) -> Result<impl Source + Send + 'static> {
+    let len = bytes.len() as u64;
+    let decoder = Decoder::builder()
+        .with_data(Cursor::new(SharedBytes(bytes)))
+        .with_byte_len(len)
+        .with_seekable(true)
+        .with_gapless(true)
+        .with_hint(if encoding.is_empty() { "mp3" } else { encoding })
+        .build()
+        .context("decoding the track")?;
+    Ok(decoder.amplify(db_to_gain(gain_db)))
 }
 
 /// Radio comes as HE-AAC ("aacplus"), whose high band (SBR) no Rust decoder
