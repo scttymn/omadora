@@ -60,11 +60,12 @@ BarWidget {
     tooltipText: root.label
     fixedWidth: button.vertical ? -1 : logo.implicitWidth + button.scaledHorizontalMargin * 2
 
-    PandoraLogo {
+    OmadoraMark {
       id: logo
       anchors.centerIn: parent
-      // Glyph icons ink about 85% of their font size; match the neighbors.
-      logoHeight: Math.round(Style.font.body * 0.85)
+      // A solid circle reads smaller than a glyph of the same height, so
+      // match the bar's other circular mark (GitHub's), not the glyph median.
+      size: Style.font.body * 0.96
       color: button.foreground
       opacity: player.hasPlayer ? 1 : 0.6
     }

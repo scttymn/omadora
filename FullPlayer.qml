@@ -283,26 +283,13 @@ Item {
       anchors.top: parent.top
       height: Style.space(52)
 
-      Row {
+      OmadoraLogo {
         anchors.left: parent.left
         anchors.leftMargin: Style.space(18)
         anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.space(10)
-
-        Label {
-          text: "󰀃"
-          color: root.theme.accent
-          font.pixelSize: Style.font.title
-          anchors.verticalCenter: parent.verticalCenter
-        }
-
-        Label {
-          text: "pandora"
-          color: root.theme.strong
-          font.pixelSize: Style.font.title
-          font.bold: true
-          anchors.verticalCenter: parent.verticalCenter
-        }
+        xHeight: Style.space(13)
+        markColor: root.theme.accent
+        wordColor: root.theme.strong
       }
 
       Rectangle {
