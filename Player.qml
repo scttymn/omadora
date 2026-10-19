@@ -33,6 +33,10 @@ QtObject {
   // as with Pandora's own "Let me listen".
   readonly property bool busy: engine.busy
   readonly property bool needsAccount: engine.needsAccount
+  // Pandora Free (ad-supported): Omadora can't play its ads yet, so it
+  // plays nothing and says so up front.
+  readonly property bool adSupported: engine.account !== null && engine.account.audioAds === true
+  readonly property string adNote: "Pandora Free plays with ads, which Omadora doesn't support yet. Pandora Plus or Premium works fully."
   function listenHere() { engine.listenHere() }
 
   // What the player is playing from: a station, album, playlist, or song.

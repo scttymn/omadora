@@ -14,7 +14,7 @@ Item {
   signal albumRequested()
 
   readonly property string stationLabel: player.sourceLabel !== "" ? player.sourceLabel : "Omadora"
-  readonly property bool showNotice: player.title === "" && player.notice !== ""
+  readonly property bool showNotice: player.adSupported || (player.title === "" && player.notice !== "")
 
   Rectangle {
     anchors.fill: parent
@@ -113,6 +113,8 @@ Item {
           textFormat: Text.PlainText
           width: parent.width
           text: {
+            if (root.player.adSupported)
+              return root.player.adNote
             if (root.player.title !== "")
               return root.player.title
             if (root.player.notice !== "")

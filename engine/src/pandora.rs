@@ -104,6 +104,10 @@ fn unix_now() -> i64 {
 pub struct Account {
     pub subscriber: bool,
     pub audio_ads: bool,
+    /// Can play albums, playlists, and songs on demand (Premium). Free
+    /// accounts can't; Plus is a subscriber that can't either, which shows
+    /// only when Pandora refuses the first on-demand play.
+    pub on_demand: bool,
 }
 
 /// Keep a newly accepted account: the password in the keyring, the email in
@@ -151,16 +155,18 @@ fn session_path() -> Option<PathBuf> {
 fn load_session() -> Option<(String, Account)> {
     let saved: Value = serde_json::from_str(&fs::read_to_string(session_path()?).ok()?).ok()?;
     let token = saved["token"].as_str().filter(|t| !t.is_empty())?.to_string();
+    let subscriber = saved["subscriber"].as_bool().unwrap_or(false);
     let account = Account {
-        subscriber: saved["subscriber"].as_bool().unwrap_or(false),
+        subscriber,
         audio_ads: saved["audioAds"].as_bool().unwrap_or(true),
+        on_demand: saved["onDemand"].as_bool().unwrap_or(subscriber),
     };
     Some((token, account))
 }
 
 fn save_session(token: &str, account: &Account) {
     let Some(path) = session_path() else { return };
-    let body = json!({ "token": token, "subscriber": account.subscriber, "audioAds": account.audio_ads });
+    let body = json!({ "token": token, "subscriber": account.subscriber, "audioAds": account.audio_ads, "onDemand": account.on_demand });
     let _ = crate::files::write_private(&path, body.to_string().as_bytes());
 }
 
@@ -218,9 +224,11 @@ fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, 
     }
     let result = &login["result"];
     let token = result["userAuthToken"].as_str().ok_or_else(|| anyhow!("sign-in returned no token"))?.to_string();
+    let subscriber = result["isSubscriber"].as_bool().unwrap_or(false);
     let account = Account {
-        subscriber: result["isSubscriber"].as_bool().unwrap_or(false),
+        subscriber,
         audio_ads: result["hasAudioAds"].as_bool().unwrap_or(true),
+        on_demand: subscriber,
     };
     Ok((token, account))
 }
@@ -319,6 +327,14 @@ impl Pandora {
 
     pub fn account(&self) -> Account {
         self.account.lock().unwrap().clone()
+    }
+
+    /// Pandora refused an on-demand play: this account plays radio only.
+    /// Remembered with the session.
+    pub fn radio_only(&self) {
+        let mut account = self.account.lock().unwrap();
+        account.on_demand = false;
+        save_session(&self.token.lock().unwrap(), &account);
     }
 
     fn renew(&self) -> Result<()> {

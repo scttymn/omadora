@@ -99,7 +99,7 @@ Removing the plugin runs none of its code, so your Pandora password stays in the
 
 Open the player and sign in with your Pandora email and password. The engine checks them with Pandora, then keeps the password in your system keyring (via `secret-tool`) and the email in `~/.config/omadora/account`; the password is never written to a file. Sign out from the account button in the full player's header, which forgets both and stops playback.
 
-Any Pandora account works: free accounts get radio, and Plus and Premium add what Pandora gives them (replays, skips, albums and playlists on demand).
+Pandora Plus and Premium work fully: Plus plays radio, and Premium adds albums, playlists, and songs on demand. On Plus, songs show as radio only and start their station. Pandora Free isn't supported yet: it's paid for by audio ads, which Omadora can't play yet, so rather than play Free without them it plays nothing and says so.
 
 The engine listens on `$XDG_RUNTIME_DIR/omadora/engine.sock` and keeps its session beside it; [engine/README.md](engine/README.md) has its protocol and how it signs in.
 

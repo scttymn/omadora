@@ -120,9 +120,32 @@ fn connection(shared: Arc<Shared>, stream: UnixStream) -> Result<()> {
     Ok(())
 }
 
+/// Without on demand, nothing is playable on demand, whatever the catalog
+/// says of the item itself: the widget then offers its station instead.
+fn radio_only(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("playable") {
+                map.insert("playable".into(), Value::Bool(false));
+            }
+            map.values_mut().for_each(radio_only);
+        }
+        Value::Array(items) => items.iter_mut().for_each(radio_only),
+        _ => {}
+    }
+}
+
 fn respond(shared: &Shared, request: &Value, out: &Sender<String>) {
     let req = request["req"].clone();
-    let reply = match handle(shared, request) {
+    let cmd = request["cmd"].as_str().unwrap_or_default();
+    let catalog = matches!(cmd, "search" | "artist" | "album" | "playlist" | "playlists" | "recommend" | "discover");
+    let on_demand = shared.pandora().is_none_or(|p| p.account().on_demand);
+    let reply = match handle(shared, request).map(|mut result| {
+        if catalog && !on_demand {
+            radio_only(&mut result);
+        }
+        result
+    }) {
         Ok(result) => json!({ "req": req, "ok": true, "result": result }),
         Err(e) => json!({ "req": req, "ok": false, "error": format!("{e:#}") }),
     };

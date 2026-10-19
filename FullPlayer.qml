@@ -190,7 +190,7 @@ Item {
     var kind = player.sourceKind === "album" ? "Album" : player.sourceKind === "playlist" ? "Playlist" : "Song"
     return player.sourceLabel !== "" ? kind + "  ·  " + player.sourceLabel : kind
   }
-  readonly property bool showNotice: player.title === "" && player.notice !== ""
+  readonly property bool showNotice: player.adSupported || (player.title === "" && player.notice !== "")
   // As a tiled window the player can get narrow. The queue column goes
   // first, then the station list, so the track always has room.
   readonly property bool showQueue: width >= Style.space(940)
@@ -1476,6 +1476,8 @@ Item {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
           text: {
+            if (root.player.adSupported)
+              return root.player.adNote
             if (root.player.title !== "")
               return root.player.title
             if (root.player.notice !== "")

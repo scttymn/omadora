@@ -169,6 +169,9 @@ fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
+const AD_SUPPORTED: &str =
+    "Pandora Free plays with ads, which Omadora doesn't support yet. Pandora Plus or Premium works fully.";
+
 /// Queue the next track in the audio this many seconds before the end.
 const QUEUE_AHEAD: f64 = 8.0;
 
@@ -527,6 +530,24 @@ impl Engine {
                 match result {
                     Ok(loaded) => self.begin(index, loaded),
                     Err(error) => {
+                        // A plan without on demand (Free, Plus): remember it,
+                        // and play the song's station instead.
+                        if !self.radio && error.contains("not an on-demand subscriber") {
+                            if let Some(pandora) = self.shared.pandora() {
+                                pandora.radio_only();
+                            }
+                            let seed = self.current().and_then(|t| t["id"].as_str()).map(str::to_string);
+                            self.stop_audio();
+                            self.status = Status::Idle;
+                            self.source.clear();
+                            self.queue.clear();
+                            self.index = None;
+                            match seed {
+                                Some(seed) => self.start_station(String::new(), String::new(), Some(seed)),
+                                None => self.fail("Your Pandora plan plays radio, not songs on demand.".into()),
+                            }
+                            return;
+                        }
                         if self.restored && self.radio {
                             // The saved song's audio link has expired; start
                             // the station fresh rather than show an error.
@@ -738,6 +759,9 @@ impl Engine {
     /// seed (an artist or song id) and start that.
     fn start_station(&mut self, id: String, name: String, seed: Option<String>) {
         let Some(pandora) = self.pandora() else { return };
+        if self.ad_supported() {
+            return;
+        }
         if seed.is_none() {
             self.radio = true;
             self.source = id.clone();
@@ -793,7 +817,22 @@ impl Engine {
     }
 
     /// Fetch and start the track at `index`.
+    /// Pandora Free is paid for by audio ads, which this engine can't play
+    /// yet; rather than play Free ad-free, it plays nothing and says why.
+    fn ad_supported(&mut self) -> bool {
+        let free = self.shared.pandora().is_some_and(|p| p.account().audio_ads);
+        if free {
+            self.stop_audio();
+            self.status = Status::Idle;
+            self.fail(AD_SUPPORTED.into());
+        }
+        free
+    }
+
     fn load(&mut self, index: usize) {
+        if self.ad_supported() {
+            return;
+        }
         let Some(track) = self.queue.get(index).cloned() else { return };
         self.generation += 1;
         self.index = Some(index);
@@ -1112,7 +1151,7 @@ impl Engine {
             "signedIn": account.is_some(),
             "needsAccount": self.needs_account,
             "user": if account.is_some() { crate::pandora::saved_user() } else { None },
-            "account": account.map(|a| json!({ "subscriber": a.subscriber, "audioAds": a.audio_ads })),
+            "account": account.map(|a| json!({ "subscriber": a.subscriber, "audioAds": a.audio_ads, "onDemand": a.on_demand })),
             "source": { "id": self.source, "name": self.source_name },
             "station": if self.radio { self.station.clone() } else { Value::Null },
             "track": track,

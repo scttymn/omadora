@@ -131,7 +131,21 @@ BarWidget {
     implicitWidth: Style.space(1100)
     implicitHeight: Style.space(700)
     minimumSize: Qt.size(Style.space(720), Style.space(520))
-    onVisibleChanged: if (visible) player.refreshModes()
+    // Stations made elsewhere (Pandora's website or apps) show up when the
+    // player opens, and while it stays open.
+    onVisibleChanged: {
+      if (visible) {
+        player.refreshModes()
+        player.refreshStations()
+      }
+    }
+
+    Timer {
+      interval: 60000
+      repeat: true
+      running: playerWindow.visible
+      onTriggered: player.refreshStations()
+    }
     // Closed from outside (Super+W, or the compositor): its visible stays
     // true otherwise, and opening it again would change nothing.
     onClosed: visible = false
