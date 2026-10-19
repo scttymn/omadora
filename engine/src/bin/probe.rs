@@ -37,8 +37,14 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("call") => {
             let path = args.get(1).ok_or_else(|| anyhow!("call PATH [JSON]"))?;
-            let body: Value = serde_json::from_str(args.get(2).map(String::as_str).unwrap_or("{}"))?;
+            let mut text = args.get(2).cloned().unwrap_or_else(|| "{}".into());
             let pandora = Pandora::sign_in()?;
+            // "$LISTENER" stands for the account's listener id, never printed.
+            if text.contains("$LISTENER") {
+                let mine = pandora.call("v4/collections/getItems", json!({ "limit": 1 }))?;
+                text = text.replace("$LISTENER", &mine["listenerId"].to_string().trim_matches('"').to_string());
+            }
+            let body: Value = serde_json::from_str(&text)?;
             let (status, value) = pandora.post(path, &body)?;
             println!("HTTP {status}");
             println!("{}", serde_json::to_string_pretty(&redact(&value))?);
@@ -51,6 +57,19 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&page)?);
             Ok(())
         }
-        _ => bail!("usage: probe call PATH [JSON] | probe browse [PATH|BR:ID]"),
+        Some("podcasts") => {
+            let what = args.get(1).map(String::as_str).unwrap_or_default();
+            let arg = args.get(2).map(String::as_str).unwrap_or_default();
+            let pandora = Pandora::sign_in()?;
+            let out = match what {
+                "search" => omadora_engine::podcasts::search(Some(&pandora), arg)?,
+                "show" => omadora_engine::podcasts::show(Some(pandora), arg)?,
+                "trending" => omadora_engine::podcasts::trending()?,
+                _ => bail!("probe podcasts search QUERY | show KEY | trending"),
+            };
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            Ok(())
+        }
+        _ => bail!("usage: probe call PATH [JSON] | probe browse [PATH|BR:ID] | probe podcasts …"),
     }
 }
