@@ -132,6 +132,9 @@ BarWidget {
     implicitHeight: Style.space(700)
     minimumSize: Qt.size(Style.space(720), Style.space(520))
     onVisibleChanged: if (visible) player.refreshModes()
+    // Closed from outside (Super+W, or the compositor): its visible stays
+    // true otherwise, and opening it again would change nothing.
+    onClosed: visible = false
 
     FullPlayer {
       id: fullPlayer
