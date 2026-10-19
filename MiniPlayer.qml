@@ -266,7 +266,7 @@ Item {
         x: transport.step * 0 + (transport.slot - width) / 2
         anchors.verticalCenter: parent.verticalCenter
         // Radio rates songs; on demand there is a previous track instead.
-        icon: root.player.onDemand ? "󰒮" : "󰔒"
+        icon: root.player.onDemand ? "󰒮" : (root.player.rating === 2 ? "󰔑" : "󰔒")
         active: !root.player.onDemand && root.player.rating === 2
         enabled: root.player.onDemand ? root.player.canGoBack : root.player.canRate
         fontFamily: root.fontFamily
@@ -307,7 +307,7 @@ Item {
         theme: root.theme
         x: transport.step * 4 + (transport.slot - width) / 2
         anchors.verticalCenter: parent.verticalCenter
-        icon: "󰔔"
+        icon: root.player.rating === 1 ? "󰔓" : "󰔔"
         active: root.player.rating === 1
         enabled: root.player.canRate
         fontFamily: root.fontFamily

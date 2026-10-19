@@ -948,7 +948,7 @@ Item {
             x: transport.step * 1
             anchors.verticalCenter: parent.verticalCenter
             // Radio rates songs; on demand there is a previous track instead.
-            icon: root.player.onDemand ? "󰒮" : "󰔒"
+            icon: root.player.onDemand ? "󰒮" : (root.player.rating === 2 ? "󰔑" : "󰔒")
             active: !root.player.onDemand && root.player.rating === 2
             enabled: root.player.onDemand ? root.player.canGoBack : root.player.canRate
             fontFamily: root.fontFamily
@@ -997,7 +997,7 @@ Item {
             iconSize: transport.glyph
             x: transport.step * 5
             anchors.verticalCenter: parent.verticalCenter
-            icon: "󰔔"
+            icon: root.player.rating === 1 ? "󰔓" : "󰔔"
             active: root.player.rating === 1
             enabled: root.player.canRate
             fontFamily: root.fontFamily
