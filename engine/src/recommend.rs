@@ -45,7 +45,7 @@ const PICKS: usize = 8;
 
 /// Agents Omadora knows how to ask, with the names the tab shows. The same
 /// set Omarchy can make the default.
-pub const AGENTS: [(&str, &str); 11] = [
+pub const AGENTS: [(&str, &str); 12] = [
     ("claude", "Claude Code"),
     ("codex", "Codex"),
     ("cursor-agent", "Cursor"),
@@ -57,6 +57,7 @@ pub const AGENTS: [(&str, &str); 11] = [
     ("grok", "Grok"),
     ("pi", "Pi"),
     ("omp", "Oh My Pi"),
+    ("muse", "Muse Code"),
 ];
 
 fn home() -> PathBuf {
@@ -302,6 +303,19 @@ fn antigravity_command() -> &'static str {
     if installed("agy") { "agy" } else { "gemini" }
 }
 
+/// Muse names its effort levels and default in its help ("none|minimal|…
+/// (default: high)"); it has no model list.
+fn muse_offer() -> Offer {
+    let block = option_block(&help_text("muse"), "--reasoning-effort");
+    let efforts = block
+        .split_once(':')
+        .map(|(_, rest)| rest.split('(').next().unwrap_or_default())
+        .map(|list| list.split('|').map(|e| e.trim().to_string()).filter(|e| !e.is_empty() && !e.contains(' ')).collect())
+        .unwrap_or_default();
+    let default_effort = block.split_once("(default:").and_then(|(_, rest)| rest.split(')').next()).map(|e| e.trim().to_string());
+    Offer { efforts, default_effort, ..Offer::default() }
+}
+
 /// Cursor's command: `cursor-agent`, as Omarchy runs it, else the newer
 /// `agent`.
 fn cursor_command() -> &'static str {
@@ -341,6 +355,7 @@ fn offer(agent: &str) -> Offer {
         "antigravity" => antigravity_offer(),
         "grok" => grok_offer(),
         "cursor-agent" => cursor_offer(),
+        "muse" => muse_offer(),
         _ => Offer::default(),
     };
     OFFERS.lock().unwrap().insert(agent.to_string(), (Instant::now(), fresh.clone()));
@@ -453,6 +468,9 @@ fn argv(agent: &str, answer: &std::path::Path, model: Option<&str>, effort: Opti
         "antigravity" => vec![antigravity_command().to_string()],
         // Ask mode is read-only Q&A (print mode alone has every tool, shell
         // included); --trust skips the prompt for its private empty folder.
+        // Headless; its approvals and sandbox stay on. Takes the prompt from
+        // a file (see PROMPT_AS_FILE).
+        "muse" => s(&["muse", "exec"]),
         "cursor-agent" => {
             let mut a = s(&["-p", "--output-format", "text", "--mode", "ask", "--trust"]);
             a.insert(0, cursor_command().to_string());
@@ -465,6 +483,7 @@ fn argv(agent: &str, answer: &std::path::Path, model: Option<&str>, effort: Opti
     // Each CLI's own spelling of model and effort; agents without one skip it.
     let (model_flag, effort_flag) = match agent {
         "claude" | "antigravity" => (Some("--model"), Some("--effort")),
+        "muse" => (Some("--model"), Some("--reasoning-effort")),
         "codex" => (Some("-m"), None),
         "grok" => (Some("-m"), Some("--reasoning-effort")),
         "gemini" | "opencode" | "copilot" | "cursor-agent" => (Some("--model"), None),
@@ -510,11 +529,13 @@ fn agent_dir() -> Result<PathBuf> {
 
 /// Agents whose print mode won't read the prompt from stdin.
 const PROMPT_AS_ARGUMENT: [&str; 1] = ["antigravity"];
+/// Agents that read it from a file instead: written owner-only into the
+/// agent's private folder, so only its path is on the command line.
+const PROMPT_AS_FILE: [&str; 1] = ["muse"];
 
 /// Run a command to completion or the timeout; its stdout.
-fn run(mut command: Command, input: Option<&str>) -> Result<String> {
-    let dir = agent_dir()?;
-    command.current_dir(&dir).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+fn run(mut command: Command, input: Option<&str>, dir: &std::path::Path) -> Result<String> {
+    command.current_dir(dir).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
     if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
         stdin.write_all(text.as_bytes())?;
@@ -630,7 +651,7 @@ pub fn recommend(pandora: &Pandora, state: &Value, fresh: bool) -> Result<Value>
     let reply = if let Some(command) = ai_setting("command") {
         let mut c = Command::new("sh");
         c.arg("-c").arg(command);
-        run(c, Some(&question))?
+        run(c, Some(&question), &agent_dir()?)?
     } else {
         let (model, effort) = chosen(&choice.agent, &offer(&choice.agent));
         let args = argv(&choice.agent, &answer_file, model.as_deref(), effort.as_deref()).ok_or_else(|| anyhow!("Omadora doesn't know how to ask {name} yet."))?;
@@ -639,11 +660,19 @@ pub fn recommend(pandora: &Pandora, state: &Value, fresh: bool) -> Result<Value>
         }
         let mut c = Command::new(&args[0]);
         c.args(&args[1..]);
+        let dir = agent_dir()?;
         let printed = if PROMPT_AS_ARGUMENT.contains(&choice.agent.as_str()) {
             c.arg(&question);
-            run(c, None)?
+            run(c, None, &dir)?
+        } else if PROMPT_AS_FILE.contains(&choice.agent.as_str()) {
+            let file = dir.join("prompt.txt");
+            crate::files::write_private(&file, question.as_bytes())?;
+            c.arg("--prompt-file").arg(&file);
+            let printed = run(c, None, &dir);
+            let _ = std::fs::remove_file(&file);
+            printed?
         } else {
-            run(c, Some(&question))?
+            run(c, Some(&question), &dir)?
         };
         std::fs::read_to_string(&answer_file).ok().filter(|s| !s.trim().is_empty()).unwrap_or(printed)
     };
@@ -739,7 +768,7 @@ mod tests {
         assert_eq!(agy[1..], ["--model", "gemini-3.8-flash-low", "--effort", "low", "--print"]);
         let codex = argv("codex", answer, None, None).unwrap();
         assert_eq!(codex.last().unwrap(), "-");
-        assert!(argv("muse", answer, None, None).is_none());
+        assert!(argv("openclaw", answer, None, None).is_none());
     }
 
     #[test]
