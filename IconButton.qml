@@ -9,7 +9,7 @@ Rectangle {
   property string icon: ""
   property bool primary: false
   property bool active: false
-  property real iconSize: primary ? Style.font.iconLarge : Style.font.title
+  property real iconSize: primary ? Math.round(Style.font.iconLarge * 1.2) : Style.font.heading
   property string fontFamily: Style.font.family
   signal activated()
 

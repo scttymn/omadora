@@ -716,8 +716,16 @@ Item {
       anchors.left: stationCol.right
       anchors.right: queueCol.left
 
-      readonly property real lane: Math.max(Style.space(340), Math.min(Style.space(440), width - Style.space(48)))
-      readonly property real artSize: Math.max(Style.space(96), Math.min(Style.space(260), height - Style.space(360)))
+      // One factor for the whole column: 1 at the size the mockup was drawn
+      // for, growing with the window (by whichever of width or height runs
+      // out first) so a big window fills instead of leaving a gap.
+      readonly property real fit: Math.max(1, Math.min(1.7,
+        (width - Style.space(48)) / Style.space(440),
+        height / Style.space(660)))
+      readonly property real lane: Math.max(Style.space(340), Math.min(Style.space(440) * fit, width - Style.space(48)))
+      readonly property real artSize: Math.max(Style.space(96), Math.min(Style.space(260) * fit, height - Style.space(380) * fit))
+      // Text grows more gently than the art, so it never shouts.
+      readonly property real textFit: Math.min(fit, 1.4)
 
       BrowseView {
         anchors.fill: parent
@@ -738,8 +746,8 @@ Item {
       Column {
         id: center
         visible: root.view === "now"
-        anchors.top: parent.top
-        anchors.topMargin: Style.space(28)
+        // Centered in the column when there is room; never above the top.
+        y: Math.max(Style.space(28), (stage.height - height) / 2)
         anchors.horizontalCenter: parent.horizontalCenter
         width: stage.lane
         spacing: 0
@@ -761,6 +769,7 @@ Item {
           horizontalAlignment: Text.AlignHCenter
           text: root.sourceCaption
           color: root.theme.accent
+          font.pixelSize: Math.round(Style.font.bodySmall * stage.textFit)
           font.underline: sourceArea.containsMouse && sourceArea.enabled
 
           MouseArea {
@@ -791,7 +800,7 @@ Item {
             return root.player.loading ? "Loading…" : "Nothing playing"
           }
           color: root.showNotice ? root.theme.muted : root.theme.strong
-          font.pixelSize: root.showNotice ? Style.font.body : Style.font.display
+          font.pixelSize: root.showNotice ? Style.font.body : Math.round(Style.font.display * stage.textFit)
           font.bold: !root.showNotice
           wrapMode: root.showNotice ? Text.WordWrap : Text.NoWrap
           maximumLineCount: 4
@@ -844,7 +853,7 @@ Item {
             visible: text !== ""
             width: Math.min(implicitWidth, creditRow.cap)
             text: root.player.artist
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: Math.round(Style.font.subtitle * stage.textFit)
             onClicked: root.showArtist(root.player.artistId, root.player.artist)
           }
 
@@ -852,14 +861,14 @@ Item {
             visible: root.player.artist !== "" && root.player.album !== ""
             text: "·"
             color: root.theme.muted
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: Math.round(Style.font.subtitle * stage.textFit)
           }
 
           LinkLabel {
             visible: text !== ""
             width: Math.min(implicitWidth, creditRow.cap)
             text: root.player.album
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: Math.round(Style.font.subtitle * stage.textFit)
             onClicked: root.showAlbum(root.player.albumId, root.player.album, root.player.artist)
           }
         }
@@ -869,6 +878,7 @@ Item {
         Scrubber {
           id: progress
           width: parent.width
+          barHeight: Math.round(Style.space(3) * Math.min(stage.fit, 1.5))
           fraction: root.player.length > 0 ? root.player.position / root.player.length : 0
           enabled: root.player.canSeek
           track: root.theme.raised
@@ -884,14 +894,14 @@ Item {
             id: fullElapsed
             text: root.player.formatTime(progress.dragging || progress.settling ? progress.shown * root.player.length : root.player.position)
             color: root.theme.muted
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: Math.round(Style.font.bodySmall * stage.textFit)
             anchors.left: parent.left
           }
 
           Label {
             text: root.player.formatTime(root.player.length)
             color: root.theme.muted
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: Math.round(Style.font.bodySmall * stage.textFit)
             anchors.right: parent.right
           }
         }
@@ -902,13 +912,18 @@ Item {
         Item {
           id: transport
           width: parent.width
-          height: Style.space(64)
+          height: Style.space(64) * stage.fit
 
-          readonly property real slot: Style.space(36)
+          // Every button scales with the column; the play button stays the
+          // big square in the middle.
+          readonly property real slot: Style.space(40) * stage.fit
+          readonly property real glyph: Math.round(Style.font.heading * stage.fit)
           readonly property real step: (width - slot) / 6
 
           IconButton {
             theme: root.theme
+            width: transport.slot
+            iconSize: transport.glyph
             x: transport.step * 0
             anchors.verticalCenter: parent.verticalCenter
             icon: "󰽥"
@@ -928,6 +943,8 @@ Item {
 
           IconButton {
             theme: root.theme
+            width: transport.slot
+            iconSize: transport.glyph
             x: transport.step * 1
             anchors.verticalCenter: parent.verticalCenter
             // Radio rates songs; on demand there is a previous track instead.
@@ -940,6 +957,8 @@ Item {
 
           IconButton {
             theme: root.theme
+            width: transport.slot
+            iconSize: transport.glyph
             x: transport.step * 2
             anchors.verticalCenter: parent.verticalCenter
             icon: "󰦛"
@@ -952,16 +971,18 @@ Item {
             theme: root.theme
             x: transport.step * 3 + (transport.slot - width) / 2
             anchors.verticalCenter: parent.verticalCenter
-            width: Style.space(64)
+            width: Style.space(64) * stage.fit
             icon: root.player.loading ? "󰔟" : (root.player.playing ? "󰏤" : "󰐊")
             primary: true
-            iconSize: Style.font.iconLarge
+            iconSize: Math.round(Style.font.iconLarge * 1.2 * stage.fit)
             fontFamily: root.fontFamily
             onActivated: root.player.playPause()
           }
 
           IconButton {
             theme: root.theme
+            width: transport.slot
+            iconSize: transport.glyph
             x: transport.step * 4
             anchors.verticalCenter: parent.verticalCenter
             icon: "󰒭"
@@ -972,6 +993,8 @@ Item {
 
           IconButton {
             theme: root.theme
+            width: transport.slot
+            iconSize: transport.glyph
             x: transport.step * 5
             anchors.verticalCenter: parent.verticalCenter
             icon: "󰔔"
@@ -983,6 +1006,8 @@ Item {
 
           IconButton {
             theme: root.theme
+            width: transport.slot
+            iconSize: transport.glyph
             x: transport.step * 6
             anchors.verticalCenter: parent.verticalCenter
             icon: "󰇘"
