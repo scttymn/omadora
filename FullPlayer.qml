@@ -775,6 +775,8 @@ Item {
 
       ListView {
         id: playlistList
+        // Room at the end, clear of the bottom player.
+        bottomMargin: Style.space(20)
         visible: root.sideTab === "playlists" && count > 0
         anchors.top: stationHeading.bottom
         anchors.topMargin: Style.space(12)
@@ -840,6 +842,8 @@ Item {
 
       ListView {
         id: stationList
+        // Room at the end, clear of the bottom player.
+        bottomMargin: Style.space(20)
         anchors.top: shuffleRow.visible ? shuffleRow.bottom : stationHeading.bottom
         anchors.topMargin: shuffleRow.visible ? Style.space(2) : Style.space(12)
         anchors.bottom: parent.bottom
@@ -970,6 +974,8 @@ Item {
 
       ListView {
         id: queueList
+        // Room at the end, clear of the bottom player.
+        bottomMargin: Style.space(20)
         anchors.top: queueTabs.bottom
         anchors.topMargin: Style.space(20)
         anchors.bottom: parent.bottom
@@ -1202,6 +1208,8 @@ Item {
 
         ListView {
           id: aiList
+          // Room at the end, clear of the bottom player.
+          bottomMargin: Style.space(20)
           visible: aiPanel.mode === "picks"
           anchors.top: aiHeader.bottom
           anchors.topMargin: Style.space(16)
