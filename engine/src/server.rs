@@ -16,7 +16,7 @@
 //!   volume {level}                 0.0 to 1.0, the engine's own level
 //!   stations                       the listener's radio stations
 //!   station {id, name?}            play a station; id "shuffle" for Shuffle
-//!   createStation {seed}           make a station from an AR: or TR: id and play it
+//!   createStation {seed}           make a station from an AR:, TR:, or GE: id and play it
 //!   removeStation {id}             remove a station from the account; the stations left
 //!   collect {id, add}              add a song, album, or playlist to the collection, or take it out
 //!   collectionArtists              the artists of the collected albums and songs
@@ -25,6 +25,7 @@
 //!   listenHere                     take the account over from another device
 //!   signIn {user, password}        sign in, and save the account once Pandora accepts it
 //!   signOut                        forget the saved account and stop
+//!   browse {path?, id?}            the Browse page, a section's full list, or a mood's stations
 //!   discover {refresh?}            magazine articles, matched to albums, songs, artists
 //!   image {url}                    an article's picture as a local file, cached
 //!   recommend {fresh?}             songs like the one playing, from the AI agent
@@ -249,6 +250,10 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
                 thumbs: from.iter().any(|f| f == "thumbs"),
             });
             Ok(json!({}))
+        }
+        "browse" => {
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
+            crate::browse::page(&pandora, request["path"].as_str(), request["id"].as_str())
         }
         "collectionArtists" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;

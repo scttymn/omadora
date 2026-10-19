@@ -1,6 +1,7 @@
 //! The Omadora engine: plays Pandora for the Omadora bar widget.
 
 pub mod audio;
+pub mod browse;
 pub mod catalog;
 pub mod collection;
 pub mod discover;

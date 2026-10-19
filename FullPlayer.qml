@@ -13,8 +13,6 @@ Item {
   signal shrinkRequested()
 
   property string queuePage: "next"
-  property string sideTab: "stations"
-  property string stationQuery: ""
   property bool moreOpen: false
   property point moreAt: Qt.point(0, 0)
   property bool accountOpen: false
@@ -22,20 +20,41 @@ Item {
   // The window is on screen (set by the bar widget).
   property bool shown: true
 
-  // Two places to be: Music (stations, the player, up next) and Discover
-  // (the magazine). Pages from either open under Music.
-  property string section: "music"
+  // Four places to be: Now Playing (the track, with up next beside it),
+  // Music (your stations, playlists, and artists), Browse, and Discover
+  // (the magazine).
+  property string section: "now"
+
+  // Where each place starts: null is the track (Now Playing) or the
+  // magazine (Discover).
+  function start(name) {
+    if (name === "collection")
+      return { kind: "collection" }
+    if (name === "browse")
+      return { kind: "browse" }
+    return null
+  }
+
+  // Each place keeps its own pages, so going back to one finds you where you
+  // left it. Now Playing always opens on the track, and choosing the place
+  // you are in takes you back to its start.
+  property var places: ({})
 
   function showSection(name) {
+    if (name !== section) {
+      var kept = Object.assign({}, places)
+      kept[section] = { page: page, pageStack: pageStack }
+      places = kept
+    }
+    var mine = name === section || name === "now" ? null : places[name]
     section = name
-    if (name === "music")
-      showNow()
-    else
+    page = mine ? mine.page : start(name)
+    pageStack = mine ? mine.pageStack : []
+    if (name === "discover")
       loadDiscover(false)
   }
 
-  // The middle column shows the track, or a page from the catalog. Pages
-  // stack, so Back retraces artist → album → artist.
+  // Pages stack, so Back retraces artist → album → artist.
   property var page: null
   property var pageStack: []
   readonly property string view: page ? page.kind : "now"
@@ -47,9 +66,16 @@ Item {
     root.player.createError = ""
   }
 
+  // Open a page in a given place, such as the collection's own lists.
+  function openIn(name, next) {
+    if (section !== name)
+      showSection(name)
+    open(next)
+  }
+
   function back() {
     if (pageStack.length === 0) {
-      showNow()
+      page = start(section)
       return
     }
     page = pageStack[pageStack.length - 1]
@@ -57,15 +83,13 @@ Item {
   }
 
   function showNow() {
-    page = null
-    pageStack = []
+    showSection("now")
   }
 
   function showSearch(query) {
     var q = String(query || "").trim()
     if (q === "")
       return
-    section = "music"
     open({ kind: "search", query: q })
   }
 
@@ -94,25 +118,6 @@ Item {
     function onStationCreated() { root.showNow() }
   }
 
-  // The listener's playlists, fetched when the Playlists tab first shows.
-  property var playlists: []
-  property bool playlistsLoaded: false
-  property string playlistsError: ""
-
-  function loadPlaylists() {
-    if (playlistsLoaded || !root.engine.signedIn)
-      return
-    playlistsLoaded = true
-    root.engine.request("playlists", {}, function (ok, result) {
-      if (ok)
-        root.playlists = result
-      else {
-        root.playlistsError = String(result)
-        root.playlistsLoaded = false
-      }
-    })
-  }
-
   // Discover: magazine articles, matched to albums, songs, and artists.
   property var discover: null
   property bool discoverLoading: false
@@ -136,58 +141,14 @@ Item {
     onTriggered: root.loadDiscover(false)
   }
 
-  // The collection's artists, read each time the tab opens: liking a song
-  // can add one.
-  property var artists: []
-  property bool artistsLoaded: false
-  property string artistsError: ""
-
-  function loadArtists() {
-    if (!root.engine.signedIn)
-      return
-    root.engine.request("collectionArtists", {}, function (ok, result) {
-      if (ok) {
-        root.artists = result
-        root.artistsError = ""
-      } else {
-        root.artistsError = String(result)
-      }
-      root.artistsLoaded = true
-    })
-  }
-
-  onSideTabChanged: {
-    if (sideTab === "playlists")
-      loadPlaylists()
-    else if (sideTab === "artists")
-      loadArtists()
-  }
-
-  // A like, a collect, or a removal: the Artists list is out of date.
-  Connections {
-    target: root.engine
-    function onCollectionVersionChanged() {
-      if (root.sideTab === "artists")
-        root.loadArtists()
-    }
-  }
   Connections {
     target: root.engine
     function onSignedInChanged() {
-      // Signed out (or a new account): the playlists were someone else's.
+      // Signed out (or a new account): the pages were someone else's.
       if (!root.engine.signedIn) {
-        root.playlists = []
-        root.playlistsLoaded = false
-        root.playlistsError = ""
-        root.artists = []
-        root.artistsLoaded = false
-        root.artistsError = ""
+        root.places = ({})
         return
       }
-      if (root.sideTab === "playlists")
-        root.loadPlaylists()
-      else if (root.sideTab === "artists")
-        root.loadArtists()
       if (root.section === "discover")
         root.loadDiscover(false)
     }
@@ -201,25 +162,10 @@ Item {
   }
   readonly property bool showNotice: player.title === "" && player.notice !== ""
   // As a tiled window the player can get narrow. The queue column goes
-  // first, then the station list, so the track always has room.
-  readonly property bool showQueue: width >= Style.space(940)
-  readonly property bool showStations: width >= Style.space(620)
-  readonly property real sideWidth: showStations ? Math.min(Style.space(260), width * 0.24) : 0
-  readonly property real queueWidth: showQueue ? Math.min(Style.space(300), width * 0.27) : 0
+  // first, so the track always has room.
+  readonly property bool showQueue: width >= Style.space(720)
+  readonly property real queueWidth: showQueue ? Math.min(Style.space(320), width * 0.3) : 0
 
-  readonly property var visibleStations: {
-    var query = stationQuery.toLowerCase()
-    var all = player.stations || []
-    if (!query)
-      return all
-    var matches = []
-    for (var i = 0; i < all.length; i++) {
-      if ((all[i].name || "").toLowerCase().indexOf(query) >= 0)
-        matches.push(all[i])
-    }
-    return matches
-  }
-  readonly property bool shuffling: player.isRadio && engine.state.station && engine.state.station.shuffle === true
   // Your stations whose names match the Pandora search, for its results page.
   readonly property var searchStations: {
     var query = page && page.kind === "search" ? String(page.query || "").toLowerCase() : ""
@@ -247,7 +193,7 @@ Item {
   // Answers are kept per song and per model and effort.
   readonly property string aiKey: aiTrack === "" || !agentInfo ? "" : [aiTrack, agentInfo.agent, agentInfo.model || "", agentInfo.effort || ""].join("|")
   readonly property var aiNow: ai[aiKey] || null
-  readonly property bool aiOnScreen: shown && section === "music" && showQueue && queuePage === "ai"
+  readonly property bool aiOnScreen: shown && section === "now" && showQueue && queuePage === "ai"
   readonly property bool hasAgent: agentInfo !== null && !!agentInfo.agent
   readonly property string agentName: agentInfo && agentInfo.name ? agentInfo.name : "the agent"
 
@@ -439,150 +385,6 @@ Item {
     }
   }
 
-  component StationRow: Rectangle {
-    id: row
-    property string name: ""
-    property string detail: ""
-    property string glyph: ""
-    property color swatch: "transparent"
-    property string art: ""
-    property bool current: false
-    // Removing asks first, in the row: a station's thumbs go with it.
-    property bool removable: false
-    property bool confirming: false
-    property string problem: ""
-    signal picked()
-    signal removeRequested()
-
-    height: Style.space(52)
-    radius: Style.cornerRadius
-    color: confirming ? Util.alpha(root.theme.accent, 0.14)
-      : current ? root.theme.raised : (stationHover.hovered ? Util.alpha(root.theme.raised, 0.6) : "transparent")
-
-    ArtMark {
-      id: chip
-      visible: row.glyph === ""
-      anchors.left: parent.left
-      anchors.leftMargin: Style.space(8)
-      anchors.verticalCenter: parent.verticalCenter
-      width: Style.space(32)
-      height: width
-      rings: false
-      art: row.swatch
-      artUrl: row.art
-    }
-
-    Label {
-      visible: row.glyph !== ""
-      anchors.horizontalCenter: chip.horizontalCenter
-      anchors.verticalCenter: parent.verticalCenter
-      text: row.glyph
-      color: root.theme.fg
-      font.pixelSize: Style.font.title
-    }
-
-    Column {
-      anchors.left: chip.right
-      anchors.leftMargin: Style.space(12)
-      anchors.right: parent.right
-      anchors.rightMargin: Style.space(8)
-      anchors.verticalCenter: parent.verticalCenter
-      spacing: Style.space(2)
-
-      Label {
-        width: parent.width
-        text: row.name
-        color: row.current ? root.theme.accent : root.theme.fg
-        font.pixelSize: Style.font.body
-        font.bold: row.current
-      }
-
-      Label {
-        width: parent.width
-        text: row.problem !== "" ? row.problem : row.detail
-        color: row.problem !== "" ? root.theme.accent : root.theme.muted
-        font.pixelSize: Style.font.caption
-        visible: text !== ""
-      }
-    }
-
-    MouseArea {
-      id: rowMouse
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      enabled: !row.confirming
-      onClicked: row.picked()
-    }
-
-    HoverHandler {
-      id: stationHover
-    }
-
-    IconButton {
-      visible: row.removable && stationHover.hovered && !row.confirming
-      anchors.right: parent.right
-      anchors.rightMargin: Style.space(4)
-      anchors.verticalCenter: parent.verticalCenter
-      width: Style.space(28)
-      theme: root.theme
-      icon: "󰅖"
-      iconSize: Style.font.body
-      fontFamily: root.fontFamily
-      onActivated: {
-        row.problem = ""
-        row.confirming = true
-      }
-    }
-
-    // "Remove?" in place of the station, until answered or left.
-    Rectangle {
-      visible: row.confirming
-      anchors.fill: parent
-      radius: Style.cornerRadius
-      color: root.theme.surface
-      border.color: root.theme.accent
-      border.width: 1
-
-      Label {
-        anchors.left: parent.left
-        anchors.leftMargin: Style.space(12)
-        anchors.right: confirmActions.left
-        anchors.rightMargin: Style.space(8)
-        anchors.verticalCenter: parent.verticalCenter
-        text: "Remove " + row.name + "?"
-        color: root.theme.strong
-        font.pixelSize: Style.font.bodySmall
-      }
-
-      Row {
-        id: confirmActions
-        anchors.right: parent.right
-        anchors.rightMargin: Style.space(10)
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.space(12)
-
-        LinkLabel {
-          text: "Remove"
-          color: root.theme.accent
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-          onClicked: {
-            row.confirming = false
-            row.removeRequested()
-          }
-        }
-        LinkLabel {
-          text: "Cancel"
-          font.pixelSize: Style.font.bodySmall
-          onClicked: row.confirming = false
-        }
-      }
-    }
-
-    onVisibleChanged: confirming = false
-  }
-
   Rectangle {
     anchors.fill: parent
     color: root.theme.bg
@@ -607,6 +409,7 @@ Item {
       }
 
       Row {
+        id: nav
         anchors.left: logo.right
         anchors.leftMargin: Style.space(36)
         anchors.top: parent.top
@@ -614,7 +417,12 @@ Item {
         spacing: Style.space(26)
 
         Repeater {
-          model: [{ key: "music", label: "Music" }, { key: "discover", label: "Discover" }]
+          model: [
+            { key: "now", label: "Now Playing" },
+            { key: "collection", label: "Music" },
+            { key: "browse", label: "Browse" },
+            { key: "discover", label: "Discover" }
+          ]
           delegate: Item {
             required property var modelData
             readonly property bool selected: root.section === modelData.key
@@ -652,11 +460,14 @@ Item {
 
       Rectangle {
         id: searchBox
-        visible: !root.engine.needsAccount
+        // What's left between the places and the tools; none in a narrow
+        // window, where the places come first.
+        readonly property real room: headerTools.x - Style.space(22) - (nav.x + nav.width) - Style.space(28)
+        visible: !root.engine.needsAccount && room >= Style.space(140)
         anchors.right: headerTools.left
         anchors.rightMargin: Style.space(22)
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(Style.space(160), Math.min(Style.space(320), parent.width - Style.space(560)))
+        width: Math.min(Style.space(320), room)
         height: Style.space(34)
         radius: Style.cornerRadius
         color: root.theme.surface
@@ -685,13 +496,12 @@ Item {
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           selectByMouse: true
-          onTextChanged: root.stationQuery = text
           onAccepted: root.showSearch(text)
           Keys.onEscapePressed: {
             text = ""
             focus = false
             if (root.view === "search")
-              root.showNow()
+              root.back()
           }
 
           Label {
@@ -775,250 +585,10 @@ Item {
       }
     }
 
-    // Left: stations.
-    Rectangle {
-      id: stationCol
-      visible: root.section === "music" && root.showStations
-      anchors.top: header.bottom
-      anchors.bottom: nowBar.top
-      width: root.sideWidth
-      color: root.theme.surface
-
-      // Stations | Playlists
-      Row {
-        id: stationHeading
-        anchors.left: parent.left
-        anchors.leftMargin: Style.space(20)
-        anchors.top: parent.top
-        anchors.topMargin: Style.space(20)
-        spacing: Style.space(18)
-
-        Repeater {
-          model: [{ key: "stations", label: "Stations" }, { key: "playlists", label: "Playlists" }, { key: "artists", label: "Artists" }]
-          delegate: Caption {
-            required property var modelData
-            text: modelData.label
-            color: root.sideTab === modelData.key ? root.theme.strong : (tabArea.containsMouse ? root.theme.fg : root.theme.faint)
-            font.bold: root.sideTab === modelData.key
-
-            MouseArea {
-              id: tabArea
-              anchors.fill: parent
-              anchors.margins: -Style.space(4)
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.sideTab = modelData.key
-            }
-          }
-        }
-      }
-
-      ListView {
-        id: playlistList
-        // Room at the end, clear of the bottom player.
-        bottomMargin: Style.space(20)
-        visible: root.sideTab === "playlists" && count > 0
-        anchors.top: stationHeading.bottom
-        anchors.topMargin: Style.space(12)
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.leftMargin: Style.space(12)
-        anchors.rightMargin: Style.space(12)
-        clip: true
-        model: root.playlists
-        boundsBehavior: Flickable.StopAtBounds
-
-        delegate: ResultRow {
-          required property var modelData
-          width: playlistList.width
-          theme: root.theme
-          fontFamily: root.fontFamily
-          title: modelData.name || ""
-          subtitle: (modelData.trackCount || 0) + " songs"
-          artUrl: modelData.art || ""
-          swatch: modelData.color || root.theme.art
-          current: root.player.onDemand && root.player.sourceId === modelData.id
-          onPicked: root.showPlaylist(modelData.id, modelData.name)
-        }
-      }
-
-      Label {
-        visible: root.sideTab === "playlists" && playlistList.count === 0
-        anchors.top: stationHeading.bottom
-        anchors.topMargin: Style.space(16)
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.leftMargin: Style.space(20)
-        anchors.rightMargin: Style.space(20)
-        wrapMode: Text.WordWrap
-        text: {
-          if (root.playlistsError !== "")
-            return root.playlistsError
-          if (!root.engine.online)
-            return "Starting the player engine…"
-          if (!root.engine.signedIn)
-            return "Signing in…"
-          return root.playlistsLoaded ? "No playlists yet." : "Loading playlists…"
-        }
-        color: root.theme.muted
-        font.pixelSize: Style.font.bodySmall
-      }
-
-      // Artists: the ones behind the collected albums and songs, as in
-      // Pandora's own My Collection.
-      ListView {
-        id: artistList
-        // Room at the end, clear of the bottom player.
-        bottomMargin: Style.space(20)
-        visible: root.sideTab === "artists" && count > 0
-        anchors.top: stationHeading.bottom
-        anchors.topMargin: Style.space(12)
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.leftMargin: Style.space(12)
-        anchors.rightMargin: Style.space(12)
-        clip: true
-        model: root.artists
-        boundsBehavior: Flickable.StopAtBounds
-
-        delegate: ResultRow {
-          required property var modelData
-          width: artistList.width
-          theme: root.theme
-          fontFamily: root.fontFamily
-          title: modelData.name || ""
-          subtitle: {
-            var parts = []
-            if (modelData.albums)
-              parts.push(modelData.albums + (modelData.albums === 1 ? " album" : " albums"))
-            if (modelData.songs)
-              parts.push(modelData.songs + (modelData.songs === 1 ? " song" : " songs"))
-            return parts.join(" · ")
-          }
-          artUrl: modelData.art || ""
-          swatch: modelData.color || root.theme.art
-          onPicked: root.showArtist(modelData.id, modelData.name)
-        }
-      }
-
-      Label {
-        visible: root.sideTab === "artists" && artistList.count === 0
-        anchors.top: stationHeading.bottom
-        anchors.topMargin: Style.space(16)
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.leftMargin: Style.space(20)
-        anchors.rightMargin: Style.space(20)
-        wrapMode: Text.WordWrap
-        text: {
-          if (root.artistsError !== "")
-            return root.artistsError
-          if (!root.engine.online)
-            return "Starting the player engine…"
-          if (!root.engine.signedIn)
-            return "Signing in…"
-          return root.artistsLoaded ? "Artists show up here as you add their albums and songs to your collection." : "Loading artists…"
-        }
-        color: root.theme.muted
-        font.pixelSize: Style.font.bodySmall
-      }
-
-      StationRow {
-        id: shuffleRow
-        visible: root.sideTab === "stations" && root.player.stationsLoaded && root.stationQuery === ""
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.margins: Style.space(12)
-        anchors.top: stationHeading.bottom
-        anchors.topMargin: Style.space(12)
-        height: visible ? Style.space(44) : 0
-        glyph: "󰒝"
-        name: "Shuffle all"
-        current: root.shuffling
-        onPicked: root.playStation({ id: "shuffle", name: "Shuffle" })
-      }
-
-      ListView {
-        id: stationList
-        // Room at the end, clear of the bottom player.
-        bottomMargin: Style.space(20)
-        anchors.top: shuffleRow.visible ? shuffleRow.bottom : stationHeading.bottom
-        anchors.topMargin: shuffleRow.visible ? Style.space(2) : Style.space(12)
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.leftMargin: Style.space(12)
-        anchors.rightMargin: Style.space(12)
-        clip: true
-        visible: root.sideTab === "stations" && count > 0
-        model: root.visibleStations
-        boundsBehavior: Flickable.StopAtBounds
-
-        function showCurrent() {
-          for (var i = 0; i < root.visibleStations.length; i++) {
-            if (root.visibleStations[i].id === root.player.sourceId) {
-              positionViewAtIndex(i, ListView.Center)
-              return
-            }
-          }
-        }
-        onCountChanged: Qt.callLater(showCurrent)
-        onVisibleChanged: if (visible) Qt.callLater(showCurrent)
-        Connections {
-          target: root.player
-          function onSourceIdChanged() { Qt.callLater(stationList.showCurrent) }
-        }
-
-        delegate: StationRow {
-          id: stationRow
-          required property var modelData
-          required property int index
-          width: stationList.width
-          name: modelData.name || ""
-          detail: modelData.thumbprint ? "Your thumbs up" : ""
-          art: modelData.art || ""
-          swatch: root.theme.swatch(index)
-          current: root.player.isRadio && !root.shuffling && modelData.id === root.player.sourceId
-          removable: modelData.canRemove === true
-          onPicked: root.playStation(modelData)
-          onRemoveRequested: {
-            root.player.removeStation(modelData.id, function (ok, error) {
-              if (!ok)
-                stationRow.problem = error
-            })
-          }
-        }
-      }
-
-      Label {
-        visible: root.sideTab === "stations" && stationList.count === 0
-        anchors.top: shuffleRow.visible ? shuffleRow.bottom : stationHeading.bottom
-        anchors.topMargin: Style.space(16)
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.leftMargin: Style.space(20)
-        anchors.rightMargin: Style.space(20)
-        wrapMode: Text.WordWrap
-        text: {
-          if (root.stationQuery !== "")
-            return "No station matches."
-          if (!root.engine.online)
-            return "Starting the player engine…"
-          if (!root.engine.signedIn)
-            return root.player.notice !== "" ? root.player.notice : "Signing in…"
-          return root.player.stationsLoaded ? "No stations yet. Search for an artist or song to start one." : "Loading stations…"
-        }
-        color: root.theme.muted
-        font.pixelSize: Style.font.bodySmall
-      }
-    }
-
     // Right: up next and history.
     Item {
       id: queueCol
-      visible: root.section === "music" && root.showQueue
+      visible: root.section === "now" && root.showQueue
       anchors.top: header.bottom
       anchors.bottom: nowBar.top
       anchors.right: parent.right
@@ -1402,10 +972,10 @@ Item {
     // Middle: the track.
     Item {
       id: stage
-      visible: root.section === "music"
+      visible: root.section === "now" && root.page === null
       anchors.top: header.bottom
       anchors.bottom: nowBar.top
-      anchors.left: stationCol.right
+      anchors.left: parent.left
       anchors.right: queueCol.left
 
       // One factor for the whole column: 1 at the size the mockup was drawn
@@ -1418,22 +988,6 @@ Item {
       readonly property real artSize: Math.max(Style.space(96), Math.min(Style.space(260) * fit, height - Style.space(380) * fit))
       // Text grows more gently than the art, so it never shouts.
       readonly property real textFit: Math.min(fit, 1.4)
-
-      BrowseView {
-        anchors.fill: parent
-        visible: root.view !== "now"
-        engine: root.engine
-        player: root.player
-        theme: root.theme
-        fontFamily: root.fontFamily
-        page: root.page || ({ kind: "search", query: "" })
-        canGoBack: root.pageStack.length > 0
-        localStations: root.view === "search" ? root.searchStations : []
-        onBack: root.back()
-        onHome: root.showNow()
-        onOpen: function (next) { root.open(next) }
-        onStationPicked: function (station) { root.playStation(station) }
-      }
 
       Column {
         id: center
@@ -1769,12 +1323,31 @@ Item {
       }
     }
 
+    // A page: beside up next under Now Playing, else the whole window.
+    BrowseView {
+      anchors.top: header.bottom
+      anchors.bottom: nowBar.top
+      anchors.left: parent.left
+      anchors.right: root.section === "now" ? queueCol.left : parent.right
+      visible: root.page !== null
+      engine: root.engine
+      player: root.player
+      theme: root.theme
+      fontFamily: root.fontFamily
+      page: root.page || ({ kind: "search", query: "" })
+      canGoBack: root.pageStack.length > 0 || root.start(root.section) === null
+      localStations: root.view === "search" ? root.searchStations : []
+      onBack: root.back()
+      onOpen: function (next) { root.open(next) }
+      onStationPicked: function (station) { root.playStation(station) }
+    }
+
     DiscoverView {
       anchors.top: header.bottom
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.bottom: nowBar.top
-      visible: root.section === "discover"
+      visible: root.section === "discover" && root.page === null
       engine: root.engine
       player: root.player
       theme: root.theme
@@ -1782,27 +1355,21 @@ Item {
       discover: root.discover
       loading: root.discoverLoading
       onRefresh: root.loadDiscover(true)
-      onOpen: function (next) {
-        root.section = "music"
-        root.open(next)
-      }
+      onOpen: function (next) { root.open(next) }
     }
 
-    // Along the bottom wherever the now-playing view isn't (Discover, or a
-    // page under Music), while a song is loaded: a way back to it.
+    // Along the bottom wherever the track isn't on screen, while a song is
+    // loaded: a way back to it.
     NowPlayingBar {
       id: nowBar
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.bottom: parent.bottom
-      wanted: root.section === "discover" || root.view !== "now"
+      wanted: !stage.visible
       player: root.player
       theme: root.theme
       fontFamily: root.fontFamily
-      onShowPlayer: {
-        root.section = "music"
-        root.showNow()
-      }
+      onShowPlayer: root.showNow()
     }
 
     SignInView {

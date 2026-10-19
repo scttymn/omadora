@@ -1,9 +1,9 @@
 import QtQuick
 import qs.Commons
 
-// The middle of the full player when it is not showing the track: search
-// results, an artist, an album, or a playlist, from Pandora's catalog through
-// the engine. Albums, playlists, and songs play on demand when the account
+// The full player's pages: Music, Browse, search results, an
+// artist, an album, or a playlist, from Pandora's catalog through the
+// engine. Albums, playlists, and songs play on demand when the account
 // allows; otherwise they start a radio station.
 Item {
   id: root
@@ -13,13 +13,14 @@ Item {
   required property var theme
   property string fontFamily: Style.font.family
 
-  // {kind: "search" | "artist" | "album" | "playlist", id, name, artist, query}
+  // {kind: "collection" | "browse" | "search" | "artist" | "album" | "playlist",
+  //  id, name, artist, query, path}. A browse page with neither path nor id
+  //  is Browse itself; a path is a section's full list, an id a mood.
   property var page: ({ kind: "search" })
   property var localStations: []
   property bool canGoBack: false
 
   signal back()
-  signal home()
   signal open(var page)
   signal stationPicked(var station)
 
@@ -29,7 +30,7 @@ Item {
   property var loaded: null
   property string loadedKey: ""
   property string loadError: ""
-  readonly property string key: page.kind + "|" + (page.id || page.query || ((page.artist || "") + "/" + (page.name || "")))
+  readonly property string key: page.kind + "|" + (page.id || page.path || page.query || ((page.artist || "") + "/" + (page.name || "")))
   // Only data fetched for this page; never the last page's while it loads.
   readonly property var info: loadedKey === key ? loaded : null
   readonly property bool loading: info === null && loadError === ""
@@ -54,6 +55,8 @@ Item {
   // Take an album or song out of "In your collection": out of the
   // collection, its station thumbs removed, or both, as it was listed.
   property string uncollectError: ""
+  // Music's filter: "all", "stations", "playlists", or "artists".
+  property string collectionFilter: "all"
   function uncollect(item) {
     uncollectError = ""
     engine.request("uncollect", { id: item.id, from: item.from || ["collection"] }, function (ok, result) {
@@ -73,7 +76,7 @@ Item {
           next[k] = root.cache[k]
       }
       root.cache = next
-      if (root.page && root.page.kind === "artist")
+      if (root.page && (root.page.kind === "artist" || root.page.kind === "collection"))
         root.load()
     }
   }
@@ -83,10 +86,13 @@ Item {
       return
     var k = key
     loadError = ""
+    // Music shows what it had at once, and reads it again: it
+    // changes from everywhere.
     if (cache[k]) {
       loaded = cache[k]
       loadedKey = k
-      return
+      if (page.kind !== "collection")
+        return
     }
     if (!engine.signedIn)
       return
@@ -104,7 +110,11 @@ Item {
       root.loadedKey = k
     }
     var p = page
-    if (p.kind === "search") {
+    if (p.kind === "collection") {
+      loadCollection(done)
+    } else if (p.kind === "browse") {
+      engine.request("browse", { path: p.path || "", id: p.id || "" }, done)
+    } else if (p.kind === "search") {
       engine.request("search", { query: p.query }, done)
     } else if (p.id) {
       engine.request(p.kind, { id: p.id }, done)
@@ -116,6 +126,32 @@ Item {
         engine.request(p.kind, { id: id }, done)
       })
     }
+  }
+
+  // The playlists and the collection's artists; the stations are the
+  // player's own list, always up to date.
+  function loadCollection(done) {
+    var got = {}
+    var failed = ""
+    var waiting = 2
+    var finish = function () {
+      if (--waiting > 0)
+        return
+      if (failed !== "" && !got.playlists && !got.artists)
+        done(false, failed)
+      else
+        done(true, { playlists: got.playlists || [], artists: got.artists || [] })
+    }
+    engine.request("playlists", {}, function (ok, result) {
+      if (ok) got.playlists = result
+      else failed = String(result)
+      finish()
+    })
+    engine.request("collectionArtists", {}, function (ok, result) {
+      if (ok) got.artists = result
+      else failed = String(result)
+      finish()
+    })
   }
 
   function resolve(p, then) {
@@ -170,6 +206,57 @@ Item {
   }
 
   readonly property bool radioBusy: player.creating !== ""
+
+  // A tile from Browse or Music, by what it is.
+  function pick(item) {
+    if (item.kind === "album")
+      root.open({ kind: "album", id: item.id, name: item.title, artist: item.artist || "" })
+    else if (item.kind === "artist")
+      root.open({ kind: "artist", id: item.id, name: item.title })
+    else if (item.kind === "playlist")
+      root.open({ kind: "playlist", id: item.id, name: item.title })
+    else if (item.kind === "category")
+      root.open({ kind: "browse", id: item.id, name: item.title })
+    else if (item.kind === "mine")
+      root.stationPicked(item.station)
+    else if (item.kind === "shuffle")
+      root.stationPicked({ id: "shuffle", name: "Shuffle" })
+    else if (item.kind === "station") {
+      // A genre station: the listener's own if they have it, else a new one.
+      var existing = player.stationNamed(item.title)
+      if (existing)
+        root.stationPicked(existing)
+      else
+        player.createStation(item.id)
+    }
+  }
+
+  readonly property bool shuffling: player.isRadio && engine.state.station && engine.state.station.shuffle === true
+
+  // Whether a tile is what's playing.
+  function playing(item) {
+    if (item.kind === "shuffle")
+      return shuffling
+    if (item.kind === "mine")
+      return player.isRadio && !shuffling && item.id === player.sourceId
+    if (item.kind === "playlist" || item.kind === "album")
+      return player.onDemand && item.id === player.sourceId
+    return false
+  }
+
+  // A station out of the account, from Music; its thumbs go too.
+  property string removeError: ""
+  function removeStation(item) {
+    removeError = ""
+    player.removeStation(item.id, function (ok, error) {
+      if (!ok)
+        root.removeError = error
+    })
+  }
+
+  function count(n, one, many) {
+    return n + " " + (n === 1 ? one : many)
+  }
 
   // ---- pieces
 
@@ -482,6 +569,9 @@ Item {
     property string detail: ""
     property string art: ""
     property color swatch: root.theme.art
+    property string glyph: ""
+    // Playing now: the title in the accent.
+    property bool current: false
     property bool removable: false
     property bool confirming: false
     signal picked()
@@ -500,6 +590,14 @@ Item {
       opacity: tileArea.containsMouse ? 0.85 : 1
     }
 
+    Label {
+      visible: tile.glyph !== ""
+      anchors.centerIn: tileArt
+      text: tile.glyph
+      color: root.theme.accentText
+      font.pixelSize: Style.font.displayLarge
+    }
+
     Column {
       id: tileText
       anchors.top: tileArt.bottom
@@ -510,7 +608,8 @@ Item {
       Label {
         width: parent.width
         text: tile.title
-        color: tileArea.containsMouse ? root.theme.accent : root.theme.strong
+        color: tileArea.containsMouse || tile.current ? root.theme.accent : root.theme.strong
+        font.bold: tile.current
         font.pixelSize: Style.font.body
         wrapMode: Text.WordWrap
         maximumLineCount: 2
@@ -560,6 +659,80 @@ Item {
         tile.removeRequested()
       }
       onCancelled: tile.confirming = false
+    }
+  }
+
+  // Tiles under a heading: `rows` rows of them with "View all" to the rest
+  // (Browse's own page, and Music's), or all of them, a screenful
+  // at a time.
+  component Shelf: Column {
+    id: shelf
+    property string title: ""
+    property var items: []
+    property int rows: 0
+    // A full list elsewhere: "View all" even when every tile fits.
+    property string more: ""
+    property int shown: 48
+    readonly property real gap: Style.space(18)
+    readonly property int perRow: Math.max(1, Math.floor((width + gap) / (Style.space(148) + gap)))
+    readonly property int limit: rows > 0 ? perRow * rows : shown
+    signal moreRequested()
+
+    width: parent ? parent.width : 0
+    visible: items.length > 0
+
+    Item {
+      width: parent.width
+      height: shelf.title !== "" ? shelfHeading.height : Style.space(8)
+
+      Heading {
+        id: shelfHeading
+        visible: shelf.title !== ""
+        width: parent.width - moreLink.width - Style.space(12)
+        text: shelf.title
+      }
+
+      Link {
+        id: moreLink
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Style.space(8)
+        visible: shelf.more !== "" || (shelf.rows > 0 && shelf.items.length > shelf.limit)
+        text: "View all"
+        idle: root.theme.muted
+        font.pixelSize: Style.font.bodySmall
+        onClicked: shelf.moreRequested()
+      }
+    }
+
+    Flow {
+      width: parent.width
+      spacing: shelf.gap
+
+      Repeater {
+        model: shelf.items.slice(0, shelf.limit)
+        delegate: Tile {
+          required property var modelData
+          title: modelData.title
+          detail: root.player.creating !== "" && root.player.creating === modelData.id ? "Starting the station…" : (modelData.detail || "")
+          art: modelData.art || ""
+          swatch: modelData.color || root.theme.art
+          glyph: modelData.glyph || ""
+          current: root.playing(modelData)
+          removable: modelData.removable === true
+          onPicked: root.pick(modelData)
+          onRemoveRequested: root.removeStation(modelData)
+        }
+      }
+    }
+
+    Link {
+      visible: shelf.rows === 0 && shelf.items.length > shelf.limit
+      topPadding: Style.space(16)
+      text: "Show more"
+      idle: root.theme.muted
+      font.pixelSize: Style.font.bodySmall
+      onClicked: shelf.shown += 48
     }
   }
 
@@ -636,26 +809,15 @@ Item {
       y: Style.space(20)
       width: scroller.width - Style.space(56)
 
-      Row {
-        spacing: Style.space(20)
-
-        Link {
-          visible: root.canGoBack
-          text: "󰁍  Back"
-          idle: root.theme.muted
-          font.pixelSize: Style.font.bodySmall
-          onClicked: root.back()
-        }
-
-        Link {
-          text: "󰝚  Now playing"
-          idle: root.theme.muted
-          font.pixelSize: Style.font.bodySmall
-          onClicked: root.home()
-        }
+      Link {
+        visible: root.canGoBack
+        text: "󰁍  Back"
+        idle: root.theme.muted
+        font.pixelSize: Style.font.bodySmall
+        onClicked: root.back()
       }
 
-      Item { width: 1; height: Style.space(18) }
+      Item { visible: root.canGoBack; width: 1; height: Style.space(18) }
 
       Note {
         visible: root.loading
@@ -667,6 +829,147 @@ Item {
         text: root.loadError
       }
 
+
+      // ---- Music: everything, a row or two of each, or one kind
+
+      Loader {
+        width: parent.width
+        active: root.page.kind === "collection" && root.info !== null
+        visible: active
+        sourceComponent: Column {
+          id: collectionPage
+          width: parent ? parent.width : 0
+          readonly property var mine: (root.player.stations || []).map(function (s) {
+            return { kind: "mine", id: s.id, title: s.name || "", detail: s.thumbprint ? "Your thumbs up" : "Station", art: s.art || "", station: s, removable: s.canRemove === true }
+          })
+          // Shuffle comes first, once there is something to shuffle.
+          readonly property var stations: mine.length === 0 ? [] : [{ kind: "shuffle", id: "shuffle", title: "Shuffle all", detail: "All your stations", glyph: "󰒝", color: root.theme.accent }].concat(mine)
+          readonly property var playlists: (root.info.playlists || []).map(function (p) {
+            return { kind: "playlist", id: p.id, title: p.name || "", detail: root.count(p.trackCount || 0, "song", "songs"), art: p.art || "", color: p.color || "" }
+          })
+          readonly property var artists: (root.info.artists || []).map(function (a) {
+            var parts = []
+            if (a.albums)
+              parts.push(root.count(a.albums, "album", "albums"))
+            if (a.songs)
+              parts.push(root.count(a.songs, "song", "songs"))
+            return { kind: "artist", id: a.id, title: a.name || "", detail: parts.join(" · "), art: a.art || "", color: a.color || "" }
+          })
+          readonly property var kinds: [
+            { key: "all", label: "All" },
+            { key: "stations", label: "Stations", items: stations },
+            { key: "playlists", label: "Playlists", items: playlists },
+            { key: "artists", label: "Artists", items: artists }
+          ]
+
+          Label {
+            width: parent.width
+            text: "Music"
+            color: root.theme.strong
+            font.pixelSize: Style.font.display
+            font.bold: true
+          }
+
+          Row {
+            topPadding: Style.space(16)
+            spacing: Style.space(8)
+
+            Repeater {
+              model: collectionPage.kinds
+              delegate: Rectangle {
+                required property var modelData
+                readonly property bool selected: root.collectionFilter === modelData.key
+                // As Discover's filters.
+                width: chipText.implicitWidth + Style.space(24)
+                height: Style.space(32)
+                radius: Style.cornerRadius
+                color: selected ? root.theme.accent : (chipArea.containsMouse ? root.theme.raised : "transparent")
+                border.color: selected ? root.theme.accent : root.theme.border
+                border.width: 1
+
+                Label {
+                  id: chipText
+                  anchors.centerIn: parent
+                  text: modelData.label
+                  color: parent.selected ? root.theme.accentText : root.theme.fg
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                MouseArea {
+                  id: chipArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.collectionFilter = modelData.key
+                }
+              }
+            }
+          }
+
+          Note {
+            visible: root.removeError !== ""
+            topPadding: Style.space(12)
+            text: root.removeError
+          }
+
+          Repeater {
+            model: collectionPage.kinds.slice(1)
+            delegate: Shelf {
+              required property var modelData
+              visible: (root.collectionFilter === "all" || root.collectionFilter === modelData.key) && items.length > 0
+              title: root.collectionFilter === "all" ? modelData.label : ""
+              items: modelData.items
+              rows: root.collectionFilter === "all" ? 2 : 0
+              onMoreRequested: root.collectionFilter = modelData.key
+            }
+          }
+
+          Note {
+            visible: collectionPage.stations.length + collectionPage.playlists.length + collectionPage.artists.length === 0
+            topPadding: Style.space(16)
+            text: "Nothing here yet. Like a song, or start a station from Browse."
+          }
+        }
+      }
+
+      // ---- Browse: the page itself, a section's full list, or a mood
+
+      Loader {
+        width: parent.width
+        active: root.page.kind === "browse" && root.info !== null
+        visible: active
+        sourceComponent: Column {
+          id: browsePage
+          width: parent ? parent.width : 0
+          readonly property bool front: !root.page.path && !root.page.id
+
+          Label {
+            width: parent.width
+            text: root.page.name || "Browse"
+            color: root.theme.strong
+            font.pixelSize: Style.font.display
+            font.bold: true
+          }
+
+          Repeater {
+            model: root.info.sections || []
+            delegate: Shelf {
+              required property var modelData
+              title: modelData.title || ""
+              items: modelData.items || []
+              rows: browsePage.front ? 1 : 0
+              more: browsePage.front ? (modelData.more || "") : ""
+              onMoreRequested: root.open({ kind: "browse", path: modelData.more, name: modelData.title })
+            }
+          }
+
+          Note {
+            visible: (root.info.sections || []).length === 0
+            topPadding: Style.space(16)
+            text: "Nothing to browse here right now."
+          }
+        }
+      }
 
       // ---- search
 

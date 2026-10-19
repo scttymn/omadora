@@ -1,6 +1,7 @@
 //! Explore Pandora's web API by hand, signed in the way the engine is.
 //!
 //!   probe call PATH [JSON]   POST JSON to https://www.pandora.com/api/PATH
+//!   probe browse [PATH|BR:ID] the Browse page as the engine shapes it
 //!
 //! Prints the HTTP status and the response, with tokens, credentials, and
 //! personal identifiers redacted. Use it to find endpoints before the engine
@@ -43,6 +44,13 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&redact(&value))?);
             Ok(())
         }
-        _ => bail!("usage: probe call PATH [JSON]"),
+        Some("browse") => {
+            let what = args.get(1).map(String::as_str).unwrap_or_default();
+            let pandora = Pandora::sign_in()?;
+            let page = omadora_engine::browse::page(&pandora, Some(what).filter(|w| w.starts_with('/')), Some(what).filter(|w| w.starts_with("BR:")))?;
+            println!("{}", serde_json::to_string_pretty(&page)?);
+            Ok(())
+        }
+        _ => bail!("usage: probe call PATH [JSON] | probe browse [PATH|BR:ID]"),
     }
 }
