@@ -31,6 +31,8 @@ Item {
   // No account is saved; the full player shows the sign-in form.
   readonly property bool needsAccount: online && state.needsAccount === true
   readonly property string user: state.user || ""
+  // Goes up whenever the collection or thumbs change.
+  readonly property int collectionVersion: state.collectionVersion || 0
   readonly property var account: state.account || null
   readonly property bool active: status === "playing" || status === "paused" || status === "loading"
   readonly property bool playing: status === "playing"

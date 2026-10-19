@@ -110,6 +110,16 @@ pub struct Account {
     pub on_demand: bool,
 }
 
+/// What the device API needs besides the user token: who the user and the
+/// partner are, and how far Pandora's clock is from ours. Kept with the
+/// session, so device calls ride on the same sign-in.
+#[derive(Clone, Debug, Default)]
+pub struct Device {
+    pub user_id: String,
+    pub partner_id: String,
+    pub offset: i64,
+}
+
 /// Keep a newly accepted account: the password in the keyring, the email in
 /// the account file. Any account saved before is replaced.
 fn remember(user: &str, password: &str) -> Result<()> {
@@ -152,7 +162,7 @@ fn session_path() -> Option<PathBuf> {
     crate::files::runtime_dir().ok().map(|dir| dir.join("session.json"))
 }
 
-fn load_session() -> Option<(String, Account)> {
+fn load_session() -> Option<(String, Account, Option<Device>)> {
     let saved: Value = serde_json::from_str(&fs::read_to_string(session_path()?).ok()?).ok()?;
     let token = saved["token"].as_str().filter(|t| !t.is_empty())?.to_string();
     let subscriber = saved["subscriber"].as_bool().unwrap_or(false);
@@ -161,17 +171,27 @@ fn load_session() -> Option<(String, Account)> {
         audio_ads: saved["audioAds"].as_bool().unwrap_or(true),
         on_demand: saved["onDemand"].as_bool().unwrap_or(subscriber),
     };
-    Some((token, account))
+    let device = saved["userId"].as_str().filter(|u| !u.is_empty()).map(|user_id| Device {
+        user_id: user_id.to_string(),
+        partner_id: saved["partnerId"].as_str().unwrap_or_default().to_string(),
+        offset: saved["syncOffset"].as_i64().unwrap_or(0),
+    });
+    Some((token, account, device))
 }
 
-fn save_session(token: &str, account: &Account) {
+fn save_session(token: &str, account: &Account, device: Option<&Device>) {
     let Some(path) = session_path() else { return };
-    let body = json!({ "token": token, "subscriber": account.subscriber, "audioAds": account.audio_ads, "onDemand": account.on_demand });
+    let mut body = json!({ "token": token, "subscriber": account.subscriber, "audioAds": account.audio_ads, "onDemand": account.on_demand });
+    if let Some(d) = device {
+        body["userId"] = json!(d.user_id);
+        body["partnerId"] = json!(d.partner_id);
+        body["syncOffset"] = json!(d.offset);
+    }
     let _ = crate::files::write_private(&path, body.to_string().as_bytes());
 }
 
 /// Partner login, then user login. Returns the user token and the account.
-fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, Account)> {
+fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, Account, Device)> {
     let partner: Value = http
         .post(format!("{TUNER}?method=auth.partnerLogin"))
         .json(&json!({
@@ -230,7 +250,11 @@ fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, 
         audio_ads: result["hasAudioAds"].as_bool().unwrap_or(true),
         on_demand: subscriber,
     };
-    Ok((token, account))
+    let user_id = match &result["userId"] {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    Ok((token, account, Device { user_id, partner_id, offset }))
 }
 
 /// A failed web API call, with Pandora's own reason when it gave one.
@@ -267,6 +291,7 @@ pub struct Pandora {
     csrf: String,
     token: Mutex<String>,
     account: Mutex<Account>,
+    device: Mutex<Option<Device>>,
 }
 
 impl Pandora {
@@ -307,22 +332,22 @@ impl Pandora {
             });
         // Reuse the last session if there is one; a stale one is renewed on
         // the first call Pandora rejects.
-        let (token, account) = match (given, load_session()) {
+        let (token, account, device) = match (given, load_session()) {
             (Some((user, password)), _) => {
-                let fresh = device_sign_in(&http, user, password)?;
+                let (token, account, device) = device_sign_in(&http, user, password)?;
                 remember(user, password)?;
-                save_session(&fresh.0, &fresh.1);
-                fresh
+                save_session(&token, &account, Some(&device));
+                (token, account, Some(device))
             }
             (None, Some(saved)) => saved,
             (None, None) => {
                 let (user, password) = credentials()?;
-                let fresh = device_sign_in(&http, &user, &password)?;
-                save_session(&fresh.0, &fresh.1);
-                fresh
+                let (token, account, device) = device_sign_in(&http, &user, &password)?;
+                save_session(&token, &account, Some(&device));
+                (token, account, Some(device))
             }
         };
-        Ok(Arc::new(Self { http, csrf, token: Mutex::new(token), account: Mutex::new(account) }))
+        Ok(Arc::new(Self { http, csrf, token: Mutex::new(token), account: Mutex::new(account), device: Mutex::new(device) }))
     }
 
     pub fn account(&self) -> Account {
@@ -334,16 +359,58 @@ impl Pandora {
     pub fn radio_only(&self) {
         let mut account = self.account.lock().unwrap();
         account.on_demand = false;
-        save_session(&self.token.lock().unwrap(), &account);
+        save_session(&self.token.lock().unwrap(), &account, self.device.lock().unwrap().as_ref());
     }
 
     fn renew(&self) -> Result<()> {
         let (user, password) = credentials()?;
-        let (token, account) = device_sign_in(&self.http, &user, &password)?;
-        save_session(&token, &account);
+        let (token, account, device) = device_sign_in(&self.http, &user, &password)?;
+        save_session(&token, &account, Some(&device));
         *self.token.lock().unwrap() = token;
         *self.account.lock().unwrap() = account;
+        *self.device.lock().unwrap() = Some(device);
         Ok(())
+    }
+
+    /// A call to the device ("tuner") API, which carries Pandora Free's
+    /// audio ads: the body encrypted, signed with the user token and
+    /// Pandora's clock. A rejected token is renewed once and the call
+    /// retried; a session from before this was kept is renewed first.
+    pub fn device_call(&self, method: &str, body: Value) -> Result<Value> {
+        if self.device.lock().unwrap().is_none() {
+            self.renew()?;
+        }
+        let attempt = |body: &Value| -> Result<Value> {
+            let device = self.device.lock().unwrap().clone().unwrap_or_default();
+            let token = self.token.lock().unwrap().clone();
+            let mut body = body.clone();
+            body["userAuthToken"] = json!(token);
+            body["syncTime"] = json!(unix_now() - device.offset);
+            let reply: Value = self
+                .http
+                .post(format!(
+                    "{TUNER}?method={method}&auth_token={}&partner_id={}&user_id={}",
+                    urlencoding::encode(&token),
+                    device.partner_id,
+                    device.user_id
+                ))
+                .header("Content-Type", "text/plain")
+                .body(encrypt(&body.to_string()))
+                .send()
+                .map_err(reqwest::Error::without_url)?
+                .json()?;
+            Ok(reply)
+        };
+        let mut reply = attempt(&body)?;
+        // 1001: the token has expired.
+        if reply["stat"] != "ok" && reply["code"] == 1001 {
+            self.renew()?;
+            reply = attempt(&body)?;
+        }
+        if reply["stat"] != "ok" {
+            bail!("{method} failed ({}: {})", reply["code"], reply["message"].as_str().unwrap_or("no reason given"));
+        }
+        Ok(reply["result"].clone())
     }
 
     /// POST without retries or error checks: the raw status and body.

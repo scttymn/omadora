@@ -17,7 +17,7 @@ Pandora in the Omarchy bar.
 
 <p align="center"><img src="docs/widget.png" width="410" alt="The mini player, opened from the bar"></p>
 
-The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app: stations, playlists, and artists on the left, the track in the middle, up next and history on the right. The shrink control returns to the mini player. Colors come from the active Omarchy theme. The Artists tab lists the artists of the albums and songs in your collection, the way Pandora's own My Collection does (Pandora's collection holds no artists itself); pick one to open their page, which starts with what of theirs is in your collection.
+The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app: stations, playlists, and artists on the left, the track in the middle, up next and history on the right. The shrink control returns to the mini player. Colors come from the active Omarchy theme. The Artists tab lists the artists of the albums and songs in your collection and of the songs you've thumbed up on stations (Pandora keeps those in your My Thumbs Up playlist), the way Pandora's own My Collection does (Pandora's collection holds no artists itself); pick one to open their page, which starts with what of theirs is in your collection. Hover an album or song there to take it out (it asks first): out of your collection, and any station thumbs up on it removed.
 
 `omadora-engine` (in `engine/`) plays everything: your radio stations, Shuffle, and albums, playlists, and songs on demand. It also serves the catalog: search, artist pages, albums, and playlists. On demand, the controls are previous, replay, play, next, and thumbs up, which adds the song to your collection (solid when it's there; press again to take it out). On radio they are thumbs, replay, play, skip, tired, and the station's modes, within what Pandora allows for each song; a thumb there is feedback to the station. Drag the progress bar to scrub wherever replays are allowed. Volume is the system output.
 
@@ -99,7 +99,7 @@ Removing the plugin runs none of its code, so your Pandora password stays in the
 
 Open the player and sign in with your Pandora email and password. The engine checks them with Pandora, then keeps the password in your system keyring (via `secret-tool`) and the email in `~/.config/omadora/account`; the password is never written to a file. Sign out from the account button in the full player's header, which forgets both and stops playback.
 
-Pandora Plus and Premium work fully: Plus plays radio, and Premium adds albums, playlists, and songs on demand. On Plus, songs show as radio only and start their station. Pandora Free isn't supported yet: it's paid for by audio ads, which Omadora can't play yet, so rather than play Free without them it plays nothing and says so.
+Every Pandora plan works. Free plays radio with Pandora's audio ads, an ad every few songs, which can't be skipped and are reported to Pandora as its own apps do. Plus plays radio without ads, and Premium adds albums, playlists, and songs on demand. Without on demand, songs show as radio only and start their station.
 
 The engine listens on `$XDG_RUNTIME_DIR/omadora/engine.sock` and keeps its session beside it; [engine/README.md](engine/README.md) has its protocol and how it signs in.
 

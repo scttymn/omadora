@@ -58,6 +58,9 @@ pub enum Cmd {
     // taken out.
     CollectionLoaded(HashSet<String>),
     Collected { id: String, add: bool },
+    // Taken out from an artist page: out of the collection, its thumbs up
+    // removed, or both.
+    Uncollected { id: String, collection: bool, thumbs: bool },
     // From helper threads.
     SignedIn(Result<Arc<Pandora>, String>),
     Queued { generation: u64, source: String, name: String, tracks: Vec<Value>, track: Option<String>, index: Option<usize> },
@@ -169,9 +172,6 @@ fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
-const AD_SUPPORTED: &str =
-    "Pandora Free plays with ads, which Omadora doesn't support yet. Pandora Plus or Premium works fully.";
-
 /// Queue the next track in the audio this many seconds before the end.
 const QUEUE_AHEAD: f64 = 8.0;
 
@@ -217,6 +217,9 @@ struct Engine {
     queued_next: Option<usize>,
     // What the listener has collected, so the thumbs show it outside radio.
     collected: HashSet<String>,
+    // Counts changes to the collection and thumbs, so the widget's Artists
+    // tab and "In your collection" know to read them again.
+    collection_version: u64,
     saved: String,
     last_save: Instant,
     clock: Clock,
@@ -259,6 +262,7 @@ pub fn start() -> anyhow::Result<Arc<Shared>> {
         cold: false,
         queued_next: None,
         collected: HashSet::new(),
+        collection_version: 0,
         saved: String::new(),
         last_save: Instant::now(),
         clock: Clock::default(),
@@ -415,6 +419,21 @@ impl Engine {
                 } else {
                     self.collected.remove(&id);
                 }
+                self.collection_version += 1;
+                self.publish();
+            }
+            Cmd::Uncollected { id, collection, thumbs } => {
+                if collection {
+                    self.collected.remove(&id);
+                }
+                if thumbs {
+                    for t in self.queue.iter_mut().chain(self.history.iter_mut()) {
+                        if t["id"] == id.as_str() && t["rating"] == 1 {
+                            t["rating"] = json!(0);
+                        }
+                    }
+                }
+                self.collection_version += 1;
                 self.publish();
             }
             Cmd::Play { source, track, index } => self.play(source, track, index),
@@ -585,6 +604,12 @@ impl Engine {
                         t["rating"] = json!(rating);
                     }
                 }
+                // A thumb up adds to My Thumbs Up, and so to the Artists list;
+                // Pandora takes a moment, so the song counts from now.
+                if let Some(track) = self.queue.iter().chain(self.history.iter()).find(|t| t["token"] == token.as_str()) {
+                    crate::collection::thumbed(public(track), rating == 1);
+                }
+                self.collection_version += 1;
                 self.publish();
             }
             Cmd::Failed(error) => self.fail(error),
@@ -759,9 +784,6 @@ impl Engine {
     /// seed (an artist or song id) and start that.
     fn start_station(&mut self, id: String, name: String, seed: Option<String>) {
         let Some(pandora) = self.pandora() else { return };
-        if self.ad_supported() {
-            return;
-        }
         if seed.is_none() {
             self.radio = true;
             self.source = id.clone();
@@ -817,22 +839,7 @@ impl Engine {
     }
 
     /// Fetch and start the track at `index`.
-    /// Pandora Free is paid for by audio ads, which this engine can't play
-    /// yet; rather than play Free ad-free, it plays nothing and says why.
-    fn ad_supported(&mut self) -> bool {
-        let free = self.shared.pandora().is_some_and(|p| p.account().audio_ads);
-        if free {
-            self.stop_audio();
-            self.status = Status::Idle;
-            self.fail(AD_SUPPORTED.into());
-        }
-        free
-    }
-
     fn load(&mut self, index: usize) {
-        if self.ad_supported() {
-            return;
-        }
         let Some(track) = self.queue.get(index).cloned() else { return };
         self.generation += 1;
         self.index = Some(index);
@@ -1150,6 +1157,7 @@ impl Engine {
             "mode": if self.source.is_empty() { "" } else if self.radio { "radio" } else { "ondemand" },
             "signedIn": account.is_some(),
             "needsAccount": self.needs_account,
+            "collectionVersion": self.collection_version,
             "user": if account.is_some() { crate::pandora::saved_user() } else { None },
             "account": account.map(|a| json!({ "subscriber": a.subscriber, "audioAds": a.audio_ads, "onDemand": a.on_demand })),
             "source": { "id": self.source, "name": self.source_name },

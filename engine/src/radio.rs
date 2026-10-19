@@ -1,5 +1,12 @@
 //! Radio: stations, their playlists, feedback, and modes, on the web API.
 //!
+//! Pandora Free is paid for by audio ads, which only the device ("tuner")
+//! API delivers: for an ad-supported account, playlists come from there,
+//! with an ad every few songs. Each such item's token says where it came
+//! from ("device:STATION:TOKEN", "ad:STATION:TRACKING,…"), so feedback,
+//! "tired", and play reports go back the same way; an ad is reported to
+//! Pandora when it starts, as its own apps do, and can't be skipped.
+//!
 //! A station plays in fragments of a few tracks each. Every track carries a
 //! token that feedback, "tired", and play reports refer to, plus its own
 //! rights (may it be skipped, rated, replayed). Pandora allows one listener
@@ -68,6 +75,17 @@ pub fn remove_station(pandora: &Pandora, id: &str) -> Result<Value> {
 
 /// Shuffle plays across all stations; Pandora hands back a station for it.
 pub fn shuffle(pandora: &Pandora) -> Result<Value> {
+    if ad_supported(pandora) {
+        // The device API's shuffle is its QuickMix station.
+        let list = pandora.device_call("user.getStationList", json!({}))?;
+        let quickmix = list["stations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|s| s["isQuickMix"].as_bool().unwrap_or(false))
+            .ok_or_else(|| anyhow::anyhow!("Pandora has no shuffle for this account"))?;
+        return Ok(json!({ "id": quickmix["stationToken"], "name": "Shuffle", "shuffle": true }));
+    }
     let s = pandora.call("v1/station/shuffle", json!({}))?;
     let mut out = station(&s);
     out["shuffle"] = json!(true);
@@ -86,7 +104,98 @@ pub fn create(pandora: &Pandora, seed: &str) -> Result<Value> {
 
 /// The next few tracks of a station, with album and artist ids filled in
 /// from the catalog so their pages open from the player.
+fn ad_supported(pandora: &Pandora) -> bool {
+    pandora.account().audio_ads
+}
+
+/// A station's next songs (and, on Pandora Free, ads) from the device API.
+fn device_fragment(pandora: &Pandora, station_id: &str) -> Result<Vec<Value>> {
+    let found = pandora.device_call("station.getPlaylist", json!({ "stationToken": station_id, "includeTrackLength": true }))?;
+    let items: Vec<Value> = found["items"].as_array().cloned().unwrap_or_default();
+    let ids: Vec<String> = items.iter().filter_map(|t| t["pandoraId"].as_str().map(str::to_string)).collect();
+    let annotations = catalog::annotate(pandora, &ids).unwrap_or_default();
+    let mut out = Vec::new();
+    for item in &items {
+        if let Some(ad) = item["adToken"].as_str() {
+            // An ad that can't be fetched is dropped; the songs still play.
+            if let Ok(ad) = device_ad(pandora, station_id, ad) {
+                out.push(ad);
+            }
+            continue;
+        }
+        let audio = &item["audioUrlMap"]["highQuality"];
+        let url = audio["audioUrl"].as_str().unwrap_or_default();
+        if url.is_empty() {
+            continue;
+        }
+        let mut track = match annotations.get(item["pandoraId"].as_str().unwrap_or_default()) {
+            Some(a) => catalog::track(a),
+            None => json!({ "id": item["pandoraId"], "artist": item["artistName"], "album": item["albumName"] }),
+        };
+        track["title"] = item["songName"].clone();
+        track["duration"] = item["trackLength"].clone();
+        if track["art"].as_str().unwrap_or_default().is_empty() {
+            track["art"] = item["albumArtUrl"].clone();
+        }
+        let rating = item["songRating"].as_i64().unwrap_or(0);
+        track["kind"] = json!("song");
+        track["rating"] = json!(if rating > 0 { 1 } else { 0 });
+        track["canRate"] = json!(item["allowFeedback"].as_bool().unwrap_or(false));
+        track["canTire"] = json!(true);
+        track["canSkip"] = json!(true);
+        track["canReplay"] = json!(false);
+        track["token"] = json!(format!("device:{station_id}:{}", item["trackToken"].as_str().unwrap_or_default()));
+        track["audioUrl"] = json!(url);
+        track["encoding"] = audio["encoding"].clone();
+        track["gain"] = item["trackGain"].clone();
+        out.push(track);
+    }
+    Ok(out)
+}
+
+/// An ad, ready to play: its audio and the tokens that report it.
+fn device_ad(pandora: &Pandora, station_id: &str, ad_token: &str) -> Result<Value> {
+    let meta = pandora.device_call(
+        "ad.getAdMetadata",
+        json!({ "adToken": ad_token, "returnAdTrackingTokens": true, "supportAudioAds": true, "includeBannerAd": false }),
+    )?;
+    let audio = &meta["audioUrlMap"]["highQuality"];
+    let url = audio["audioUrl"].as_str().filter(|u| !u.is_empty()).ok_or_else(|| anyhow::anyhow!("the ad has no audio"))?;
+    let tracking: Vec<&str> = meta["adTrackingTokens"].as_array().into_iter().flatten().filter_map(|t| t.as_str()).collect();
+    let title = meta["title"].as_str().filter(|t| !t.is_empty()).unwrap_or("Advertisement");
+    Ok(json!({
+        "kind": "ad",
+        "id": "",
+        "title": title,
+        "artist": meta["companyName"].as_str().unwrap_or_default(),
+        "album": "",
+        "art": meta["imageUrl"].as_str().unwrap_or_default(),
+        "rating": 0,
+        "canRate": false,
+        "canTire": false,
+        "canSkip": false,
+        "canReplay": false,
+        "token": format!("ad:{station_id}:{}", tracking.join(",")),
+        "audioUrl": url,
+        "encoding": audio["encoding"].as_str().unwrap_or("aacplus"),
+        "gain": "0",
+    }))
+}
+
+/// "device:STATION:TOKEN" or "ad:STATION:TRACKING" → (kind, station, rest).
+fn device_token(token: &str) -> Option<(&str, &str, &str)> {
+    let (kind, rest) = token.split_once(':')?;
+    if kind != "device" && kind != "ad" {
+        return None;
+    }
+    let (station, value) = rest.split_once(':')?;
+    Some((kind, station, value))
+}
+
 pub fn fragment(pandora: &Pandora, station_id: &str, starting: bool) -> Result<Vec<Value>> {
+    if ad_supported(pandora) {
+        return device_fragment(pandora, station_id);
+    }
     let (status, found) = pandora.post(
         "v1/playlist/getFragment",
         &json!({
@@ -156,17 +265,36 @@ fn radio_track(t: &Value, known: Option<&Value>) -> Value {
 }
 
 pub fn feedback(pandora: &Pandora, token: &str, positive: bool) -> Result<()> {
+    if let Some(("device", station, track)) = device_token(token) {
+        pandora.device_call("station.addFeedback", json!({ "stationToken": station, "trackToken": track, "isPositive": positive }))?;
+        return Ok(());
+    }
     pandora.call("v1/station/addFeedback", json!({ "trackToken": token, "isPositive": positive }))?;
     Ok(())
 }
 
 pub fn tired(pandora: &Pandora, token: &str) -> Result<()> {
+    if let Some(("device", _, track)) = device_token(token) {
+        pandora.device_call("user.sleepSong", json!({ "trackToken": track }))?;
+        return Ok(());
+    }
     pandora.call("v1/listener/addTiredSong", json!({ "trackToken": token }))?;
     Ok(())
 }
 
+/// A song or ad has started. An ad is reported to Pandora here, which is
+/// what it counts; device songs need no report.
 pub fn track_started(pandora: &Pandora, token: &str) {
-    let _ = pandora.call("v1/station/trackStarted", json!({ "trackToken": token }));
+    match device_token(token) {
+        Some(("ad", station, tracking)) => {
+            let tokens: Vec<&str> = tracking.split(',').filter(|t| !t.is_empty()).collect();
+            let _ = pandora.device_call("ad.registerAd", json!({ "stationId": station, "adTrackingTokens": tokens }));
+        }
+        Some(_) => {}
+        None => {
+            let _ = pandora.call("v1/station/trackStarted", json!({ "trackToken": token }));
+        }
+    }
 }
 
 /// Tell Pandora playback resumed here. With `take_over`, this device becomes
@@ -221,4 +349,17 @@ pub fn set_mode(pandora: &Pandora, station_id: &str, mode_id: i64) -> Result<Val
         json!({ "stationId": station_id, "modeId": mode_id }),
     )?;
     Ok(shape_modes(&found))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_tokens_say_where_they_came_from() {
+        assert_eq!(device_token("device:172:abc"), Some(("device", "172", "abc")));
+        assert_eq!(device_token("ad:172:t1,t2"), Some(("ad", "172", "t1,t2")));
+        assert_eq!(device_token("plainwebtoken"), None);
+        assert_eq!(device_token("other:1:2"), None);
+    }
 }

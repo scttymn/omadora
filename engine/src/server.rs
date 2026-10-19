@@ -20,6 +20,7 @@
 //!   removeStation {id}             remove a station from the account; the stations left
 //!   collect {id, add}              add a song, album, or playlist to the collection, or take it out
 //!   collectionArtists              the artists of the collected albums and songs
+//!   uncollect {id, from}           take it out: from ["collection", "thumbs"], as listed
 //!   thumbUp | thumbDown | tired    feedback on the radio track playing
 //!   listenHere                     take the account over from another device
 //!   signIn {user, password}        sign in, and save the account once Pandora accepts it
@@ -236,6 +237,18 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
             crate::collection::set(&pandora, id, add)?;
             shared.send(Cmd::Collected { id: id.to_string(), add });
             Ok(json!({ "collected": add }))
+        }
+        "uncollect" => {
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
+            let id = arg(request, "id")?;
+            let from: Vec<String> = request["from"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+            crate::collection::remove(&pandora, id, &from)?;
+            shared.send(Cmd::Uncollected {
+                id: id.to_string(),
+                collection: from.iter().any(|f| f == "collection"),
+                thumbs: from.iter().any(|f| f == "thumbs"),
+            });
+            Ok(json!({}))
         }
         "collectionArtists" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;

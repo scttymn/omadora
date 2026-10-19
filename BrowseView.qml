@@ -51,6 +51,33 @@ Item {
     return String(v || "").toLowerCase()
   }
 
+  // Take an album or song out of "In your collection": out of the
+  // collection, its station thumbs removed, or both, as it was listed.
+  property string uncollectError: ""
+  function uncollect(item) {
+    uncollectError = ""
+    engine.request("uncollect", { id: item.id, from: item.from || ["collection"] }, function (ok, result) {
+      if (!ok)
+        root.uncollectError = String(result)
+    })
+  }
+
+  // The collection or thumbs changed: artist pages' "In your collection" is
+  // out of date. Forget them, and read the one on screen again.
+  Connections {
+    target: root.engine
+    function onCollectionVersionChanged() {
+      var next = {}
+      for (var k in root.cache) {
+        if (!root.cache[k] || root.cache[k].collected === undefined)
+          next[k] = root.cache[k]
+      }
+      root.cache = next
+      if (root.page && root.page.kind === "artist")
+        root.load()
+    }
+  }
+
   function load() {
     if (!visible)
       return
@@ -169,6 +196,48 @@ Item {
     font.pixelSize: Style.font.bodySmall
   }
 
+  // "Remove?" over a row or tile, until answered.
+  component RemoveConfirm: Rectangle {
+    id: confirm
+    property string question: "Remove?"
+    signal confirmed()
+    signal cancelled()
+    radius: Style.cornerRadius
+    color: root.theme.surface
+    border.color: root.theme.accent
+    border.width: 1
+
+    // Clicks here don't reach what's underneath.
+    MouseArea { anchors.fill: parent }
+
+    Flow {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.leftMargin: Style.space(12)
+      anchors.rightMargin: Style.space(12)
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(12)
+
+      Label {
+        text: confirm.question
+        color: root.theme.strong
+        font.pixelSize: Style.font.bodySmall
+      }
+      Link {
+        text: "Remove"
+        idle: root.theme.accent
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        onClicked: confirm.confirmed()
+      }
+      Link {
+        text: "Cancel"
+        font.pixelSize: Style.font.bodySmall
+        onClicked: confirm.cancelled()
+      }
+    }
+  }
+
   component Link: Label {
     property color idle: root.theme.fg
     signal clicked()
@@ -243,7 +312,11 @@ Item {
     readonly property bool current: root.player.onDemand && root.player.trackId !== "" && root.player.trackId === trackRow.track.id
     // The song a Discover chip pointed at.
     readonly property bool focused: root.page.track !== undefined && root.page.track === trackRow.track.id
+    // In "In your collection": a × to take it out, after a "Remove?".
+    property bool removable: false
+    property bool confirming: false
     signal picked()
+    signal removeRequested()
 
     width: parent ? parent.width : 0
     height: Style.space(50)
@@ -251,7 +324,9 @@ Item {
     color: current ? root.theme.raised
       : focused ? Util.alpha(root.theme.accent, 0.14)
       : (trackArea.containsMouse ? Util.alpha(root.theme.raised, 0.6) : "transparent")
-    opacity: track.playable === false ? 0.6 : 1
+    // Radio-only songs are dimmed: their art and text, not the row, so the
+    // "Remove?" over it stays solid.
+    readonly property real dim: track.playable === false ? 0.6 : 1
 
     Rectangle {
       visible: trackRow.focused
@@ -262,6 +337,7 @@ Item {
 
     Label {
       id: leadLabel
+      opacity: trackRow.confirming ? 0 : trackRow.dim
       visible: !trackRow.showArt
       anchors.left: parent.left
       anchors.leftMargin: Style.space(10)
@@ -274,6 +350,7 @@ Item {
 
     ArtMark {
       id: rowArt
+      opacity: trackRow.confirming ? 0 : trackRow.dim
       visible: trackRow.showArt
       anchors.left: parent.left
       anchors.leftMargin: Style.space(8)
@@ -286,6 +363,7 @@ Item {
     }
 
     Column {
+      opacity: trackRow.confirming ? 0 : trackRow.dim
       anchors.left: trackRow.showArt ? rowArt.right : leadLabel.right
       anchors.leftMargin: Style.space(12)
       anchors.right: lengthLabel.left
@@ -335,6 +413,7 @@ Item {
 
     Label {
       id: lengthLabel
+      opacity: trackRow.confirming ? 0 : trackRow.dim
       anchors.right: parent.right
       anchors.rightMargin: Style.space(12)
       anchors.verticalCenter: parent.verticalCenter
@@ -358,6 +437,7 @@ Item {
     }
 
     IconButton {
+      id: radioButton
       visible: rowHover.hovered && !!trackRow.track.id
       anchors.right: parent.right
       anchors.rightMargin: Style.space(6)
@@ -370,6 +450,29 @@ Item {
       enabled: !root.radioBusy
       onActivated: root.startRadio(trackRow.track.id, trackRow.track.title)
     }
+
+    IconButton {
+      visible: trackRow.removable && rowHover.hovered && !trackRow.confirming
+      anchors.right: radioButton.left
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(30)
+      theme: root.theme
+      icon: "󰅖"
+      iconSize: Style.font.body
+      fontFamily: root.fontFamily
+      onActivated: trackRow.confirming = true
+    }
+
+    RemoveConfirm {
+      visible: trackRow.confirming
+      anchors.fill: parent
+      question: "Remove " + (trackRow.track.title || "it") + "?"
+      onConfirmed: {
+        trackRow.confirming = false
+        trackRow.removeRequested()
+      }
+      onCancelled: trackRow.confirming = false
+    }
   }
 
   // An album, artist, or playlist as a square tile with a caption.
@@ -379,7 +482,10 @@ Item {
     property string detail: ""
     property string art: ""
     property color swatch: root.theme.art
+    property bool removable: false
+    property bool confirming: false
     signal picked()
+    signal removeRequested()
 
     width: Style.space(148)
     height: tileArt.height + tileText.height + Style.space(10)
@@ -425,6 +531,35 @@ Item {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: tile.picked()
+    }
+
+    HoverHandler {
+      id: tileHover
+    }
+
+    IconButton {
+      visible: tile.removable && tileHover.hovered && !tile.confirming
+      anchors.top: tileArt.top
+      anchors.right: tileArt.right
+      anchors.margins: Style.space(6)
+      width: Style.space(28)
+      theme: root.theme
+      icon: "󰅖"
+      iconSize: Style.font.body
+      fontFamily: root.fontFamily
+      color: root.theme.surface
+      onActivated: tile.confirming = true
+    }
+
+    RemoveConfirm {
+      visible: tile.confirming
+      anchors.fill: tileArt
+      question: "Remove " + (tile.title || "it") + "?"
+      onConfirmed: {
+        tile.confirming = false
+        tile.removeRequested()
+      }
+      onCancelled: tile.confirming = false
     }
   }
 
@@ -716,7 +851,9 @@ Item {
                 detail: modelData.year || ""
                 art: modelData.art
                 swatch: modelData.color || root.theme.art
+                removable: true
                 onPicked: root.open({ kind: "album", id: modelData.id, name: modelData.name, artist: modelData.artist })
+                onRemoveRequested: root.uncollect(modelData)
               }
             }
           }
@@ -728,8 +865,19 @@ Item {
               track: modelData
               showArt: true
               detail: modelData.album
+              removable: true
               onPicked: root.playTrack(modelData)
+              onRemoveRequested: root.uncollect(modelData)
             }
+          }
+
+          Label {
+            visible: root.uncollectError !== ""
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: root.uncollectError
+            color: root.theme.accent
+            font.pixelSize: Style.font.bodySmall
           }
 
           Heading { visible: artistPage.artist.topTracks.length > 0; text: "Popular" }
