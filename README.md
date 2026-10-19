@@ -18,7 +18,9 @@ Typing in search filters your stations; Enter searches Pandora for songs, artist
 
 The mode chips are the current station's own modes (My Station, Crowd Faves, Deep Cuts, and whatever else Pandora offers for it); a new mode starts with the next song. The moon sets a sleep timer (15, 30, 60 minutes, off) that pauses whatever is playing, and the overflow menu marks a radio song as tired.
 
-The widget starts the engine on its own and restarts it if it dies; the engine keeps its Pandora session across restarts, so it stays the one device listening. It also remembers where you were: after a restart or a reboot the player comes back paused on the same song, at the same spot, and play picks up from there. Left-click opens and closes the player. Middle-click and the wheel skip forward.
+The widget starts the engine on its own and restarts it if it dies; the engine keeps its Pandora session across restarts, so it stays the one device listening. Left-click opens and closes the player. Middle-click and the wheel skip forward.
+
+It also remembers where you were. After a restart or a reboot the player comes back paused on the same song at the same spot: the album or playlist with its Up next, or the station with the song that was on. Play picks up from there. Nothing plays or reaches Pandora until you press play, so a restart never takes your account from another device. On radio, the station's next songs are fetched once you do, and if the saved song is too old to play, the station starts fresh instead. Where you were lives in `~/.local/state/omadora/resume.json`.
 
 ## Sign in
 
