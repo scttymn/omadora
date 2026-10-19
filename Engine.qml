@@ -148,12 +148,16 @@ Item {
         root.binary = word === "warning" ? rest.split(": ")[0] : rest
         root.startError = ""
         root.fetched = root.binary !== ""
-        // A new release replaced the engine under a running one; stop that
-        // one, and the widget starts the new one.
-        if (word === "updated" && root.online)
+        // A new release is in place. An engine already running (from before
+        // `omarchy plugin update`) is the old one, whether or not the widget
+        // has reached it yet: stop it, and the widget starts the new one.
+        // Start it a moment later, so the stop can't catch the new one.
+        if (word === "updated") {
           Quickshell.execDetached(["pkill", "-x", "omadora-engine"])
-        else
+          retryTimer.restart()
+        } else {
           root.ensureRunning()
+        }
       }
     }
   }
