@@ -9,9 +9,10 @@ Item {
   id: root
 
   readonly property string socketPath: Quickshell.env("XDG_RUNTIME_DIR") + "/omadora/engine.sock"
-  // Downloaded from the pinned GitHub release by scripts/fetch-engine, or
-  // built into the plugin by `make` (see README).
-  readonly property string binary: Qt.resolvedUrl("bin/omadora-engine").toString().replace(/^file:\/\//, "")
+  // The engine to start, as scripts/fetch-engine reports it: a `make` build
+  // in the plugin's bin/, or the pinned GitHub release it downloaded into
+  // ~/.local/share/omadora/engine (see README).
+  property string binary: ""
   readonly property string fetchScript: Qt.resolvedUrl("scripts/fetch-engine").toString().replace(/^file:\/\//, "")
   // The engine binary is in place (fetched, or already there).
   property bool fetched: false
@@ -141,11 +142,15 @@ Item {
           fetchRetry.restart()
           return
         }
+        // "ok PATH", "updated PATH", or "warning PATH: why".
+        var word = line.split(" ")[0]
+        var rest = line.slice(word.length + 1)
+        root.binary = word === "warning" ? rest.split(": ")[0] : rest
         root.startError = ""
-        root.fetched = true
-        // A new release replaced the binary under a running engine; stop
-        // that one, and the widget starts the new one.
-        if (line === "updated" && root.online)
+        root.fetched = root.binary !== ""
+        // A new release replaced the engine under a running one; stop that
+        // one, and the widget starts the new one.
+        if (word === "updated" && root.online)
           Quickshell.execDetached(["pkill", "-x", "omadora-engine"])
         else
           root.ensureRunning()

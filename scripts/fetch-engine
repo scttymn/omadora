@@ -1,38 +1,43 @@
 #!/usr/bin/env bash
-# Make bin/omadora-engine the engine release this checkout pins in
-# engine-release.json, downloading it from GitHub if it is missing or older.
-# The download must match the pinned SHA-256, so the repository vouches for
-# the exact file. A development build from `make` (no release mark) is left
-# alone.
+# Find the engine for the widget to start: a development build in the
+# plugin's bin/ (from `make engine`), else the release this checkout pins in
+# engine-release.json, downloaded from GitHub into
+# ~/.local/share/omadora/engine/ if it is missing or older. The download must
+# match the pinned SHA-256, so the repository vouches for the exact file.
 #
-# Prints one line for the widget: "ok", "updated" (the binary was replaced),
-# "warning: …" (kept the engine it had), or "error: …" (there is none).
-# Exits non-zero only on an error.
+# Nothing is written inside the plugin's folder: Omarchy reloads a plugin
+# when its files change, which would restart this script mid-download.
+#
+# Prints one line for the widget: "ok PATH", "updated PATH" (a new release
+# replaced the old one), "warning PATH: …" (kept the engine it had), or
+# "error: …" (there is none). Exits non-zero only on an error.
 
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
+dev="$here/bin/omadora-engine"
 pin="$here/engine-release.json"
-bin="$here/bin/omadora-engine"
-mark="$here/bin/omadora-engine.release"
+dir="${XDG_DATA_HOME:-$HOME/.local/share}/omadora/engine"
+bin="$dir/omadora-engine"
+mark="$dir/omadora-engine.release"
 repo="scttymn/omadora"
+
+if [[ -x $dev ]]; then
+  echo "ok $dev"
+  exit 0
+fi
 
 have_engine() { [[ -x $bin ]]; }
 
 # Keep a working engine when a new one cannot be had; fail only without one.
 give_up() {
   if have_engine; then
-    echo "warning: $1"
+    echo "warning $bin: $1"
     exit 0
   fi
   echo "error: $1"
   exit 1
 }
-
-if have_engine && [[ ! -e $mark ]]; then
-  echo ok
-  exit 0
-fi
 
 [[ -f $pin ]] || give_up "This copy of Omadora pins no engine release. Build one with: make engine"
 
@@ -43,13 +48,16 @@ sum=$(jq -r --arg arch "$arch" '.sha256[$arch] // empty' "$pin")
 
 wanted="$version $sum"
 if have_engine && [[ $(cat "$mark" 2>/dev/null) == "$wanted" ]]; then
-  echo ok
+  echo "ok $bin"
   exit 0
 fi
 
-mkdir -p "$here/bin"
-tmp=$(mktemp "$here/bin/.omadora-engine.XXXXXX")
+mkdir -p "$dir"
+# Partial downloads from a run that was cut off.
+find "$dir" -maxdepth 1 -name '.omadora-engine.*' -mmin +10 -delete 2>/dev/null || true
+tmp=$(mktemp "$dir/.omadora-engine.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
+trap 'exit 1' INT TERM HUP
 
 url="https://github.com/$repo/releases/download/v$version/omadora-engine-$arch-linux"
 curl -fsSL --retry 2 --connect-timeout 15 -o "$tmp" "$url" ||
@@ -61,4 +69,4 @@ got=$(sha256sum "$tmp" | cut -d' ' -f1)
 chmod 755 "$tmp"
 mv -f "$tmp" "$bin"
 printf '%s\n' "$wanted" >"$mark"
-echo updated
+echo "updated $bin"

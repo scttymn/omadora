@@ -84,7 +84,7 @@ effort = "low"
 omarchy plugin add https://github.com/scttymn/omadora.git --enable
 ```
 
-On first start, the widget downloads the Omadora engine for this version from the project's [GitHub releases](https://github.com/scttymn/omadora/releases) into the plugin's `bin/`, and uses it only if it matches the SHA-256 recorded in `engine-release.json`. `omarchy plugin update scttymn.omadora` brings a new version; the widget then fetches its engine and restarts it. Radio needs ffmpeg, which is part of Omarchy. Engines are released for x86_64 and aarch64.
+On first start, the widget downloads the Omadora engine for this version from the project's [GitHub releases](https://github.com/scttymn/omadora/releases) into `~/.local/share/omadora/engine/`, and uses it only if it matches the SHA-256 recorded in `engine-release.json`. `omarchy plugin update scttymn.omadora` brings a new version; the widget then fetches its engine and restarts it. Radio needs ffmpeg, which is part of Omarchy. Engines are released for x86_64 and aarch64.
 
 To remove it: `omarchy plugin remove scttymn.omadora`. Signing out first also clears the saved account from the keyring.
 
@@ -106,6 +106,6 @@ omarchy-shell shell rescanPlugins
 omarchy plugin enable scttymn.omadora right
 ```
 
-`make install` builds the engine into `bin/`, copies the plugin to `~/.config/omarchy/plugins/scttymn.omadora` (Omarchy will not load a symlinked plugin), and stops a running engine so the widget starts the new one. A build from `make` is never replaced by a download. Saving a file under that plugin directory reloads it, though a changed QML type sometimes needs `omarchy-restart-shell`.
+`make install` builds the engine into `bin/`, copies the plugin to `~/.config/omarchy/plugins/scttymn.omadora` (Omarchy will not load a symlinked plugin), and stops a running engine so the widget starts the new one. The widget prefers a build from `make` in the plugin's `bin/` to a downloaded release. Saving a file under that plugin directory reloads it, though a changed QML type sometimes needs `omarchy-restart-shell`.
 
 To release: bump the version in `manifest.json` and `engine/Cargo.toml`, tag `vX.Y.Z` and push the tag. The release workflow builds the engines and attaches them to a GitHub release; then `make pin VERSION=X.Y.Z` records their checksums in `engine-release.json`, and committing that lets installs download it.
