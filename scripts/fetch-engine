@@ -8,8 +8,12 @@
 # Nothing is written inside the plugin's folder: Omarchy reloads a plugin
 # when its files change, which would restart this script mid-download.
 #
-# Prints one line for the widget: "ok PATH", "updated PATH" (a new release
-# replaced the old one), "warning PATH: …" (kept the engine it had), or
+# An engine already running from anywhere else (the release before
+# `omarchy plugin update`, a replaced file) is stopped, so the widget starts
+# this one.
+#
+# Prints one line for the widget: "ok PATH", "updated PATH" (a running engine
+# was stopped for this one), "warning PATH: …" (kept the engine it had), or
 # "error: …" (there is none). Exits non-zero only on an error.
 
 set -euo pipefail
@@ -22,17 +26,28 @@ bin="$dir/omadora-engine"
 mark="$dir/omadora-engine.release"
 repo="scttymn/omadora"
 
-if [[ -x $dev ]]; then
-  echo "ok $dev"
+# Stop engines that aren't the one at $1; say so with "updated".
+use() {
+  local engine stopped=0 pid exe
+  engine=$(realpath "$1")
+  for pid in $(pgrep -u "$(id -u)" -x omadora-engine); do
+    exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+    if [[ $exe != "$engine" ]]; then
+      kill "$pid" 2>/dev/null && stopped=1
+    fi
+  done
+  if ((stopped)); then echo "updated $engine"; else echo "ok $engine"; fi
   exit 0
-fi
+}
+
+[[ -x $dev ]] && use "$dev"
 
 have_engine() { [[ -x $bin ]]; }
 
 # Keep a working engine when a new one cannot be had; fail only without one.
 give_up() {
   if have_engine; then
-    echo "warning $bin: $1"
+    echo "warning $(realpath "$bin"): $1"
     exit 0
   fi
   echo "error: $1"
@@ -47,14 +62,16 @@ sum=$(jq -r --arg arch "$arch" '.sha256[$arch] // empty' "$pin")
 [[ -n $version && -n $sum ]] || give_up "No Omadora engine is released for $arch. Build one with: make engine"
 
 wanted="$version $sum"
+mkdir -p "$dir"
+# One run at a time: a plugin reload can start several at once.
+exec 9>"$dir/.lock"
+flock 9
 if have_engine && [[ $(cat "$mark" 2>/dev/null) == "$wanted" ]]; then
-  echo "ok $bin"
-  exit 0
+  use "$bin"
 fi
 
-mkdir -p "$dir"
-# Partial downloads from a run that was cut off.
-find "$dir" -maxdepth 1 -name '.omadora-engine.*' -mmin +10 -delete 2>/dev/null || true
+# Holding the lock, any partial download is from a run that was cut off.
+rm -f "$dir"/.omadora-engine.*
 tmp=$(mktemp "$dir/.omadora-engine.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 trap 'exit 1' INT TERM HUP
@@ -69,4 +86,4 @@ got=$(sha256sum "$tmp" | cut -d' ' -f1)
 chmod 755 "$tmp"
 mv -f "$tmp" "$bin"
 printf '%s\n' "$wanted" >"$mark"
-echo "updated $bin"
+use "$bin"
