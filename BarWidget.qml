@@ -21,7 +21,7 @@ BarWidget {
   readonly property string label: {
     if (player.title && player.artist)
       return player.title + " · " + player.artist
-    return player.title || player.artist || "Pandora"
+    return player.title || player.artist || "Omadora"
   }
 
   Theme {

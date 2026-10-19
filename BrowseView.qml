@@ -85,7 +85,7 @@ Item {
       // Radio tracks come with names only; find the id by searching.
       resolve(p, function (id) {
         if (!id)
-          return done(false, "Pandora has no " + p.kind + " called " + p.name + ".")
+          return done(false, "There is no " + p.kind + " called " + p.name + ".")
         engine.request(p.kind, { id: id }, done)
       })
     }
@@ -504,7 +504,7 @@ Item {
 
       Note {
         visible: root.loading
-        text: root.engine.signedIn ? "Loading…" : (root.engine.online ? "Signing in to Pandora…" : "Starting the player engine…")
+        text: root.engine.signedIn ? "Loading…" : (root.engine.online ? "Signing in…" : "Starting the player engine…")
       }
 
       Note {
@@ -624,7 +624,7 @@ Item {
               + searchPage.found.albums.length + searchPage.found.playlists.length === 0
               && root.localStations.length === 0
             topPadding: Style.space(16)
-            text: "Nothing on Pandora matches “" + root.page.query + "”."
+            text: "Nothing matches “" + root.page.query + "”."
           }
         }
       }
@@ -826,7 +826,7 @@ Item {
 
             Note {
               visible: !albumPage.album.playable
-              text: "Your Pandora plan can't play this album on demand. Its songs can start stations."
+              text: "Your plan can't play this album on demand. Its songs can start stations."
             }
           }
 
@@ -891,7 +891,7 @@ Item {
 
             Note {
               visible: !playlistPage.anyPlayable
-              text: "Your Pandora plan can't play playlists on demand."
+              text: "Your plan can't play playlists on demand."
             }
           }
 

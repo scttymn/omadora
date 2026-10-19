@@ -153,7 +153,7 @@ Item {
 
   readonly property string sourceCaption: {
     if (!player.onDemand)
-      return player.sourceLabel !== "" ? player.sourceLabel : "Pandora"
+      return player.sourceLabel !== "" ? player.sourceLabel : "Omadora"
     var kind = player.sourceKind === "album" ? "Album" : player.sourceKind === "playlist" ? "Playlist" : "Song"
     return player.sourceLabel !== "" ? kind + "  ·  " + player.sourceLabel : kind
   }
@@ -591,7 +591,7 @@ Item {
           if (!root.engine.online)
             return "Starting the player engine…"
           if (!root.engine.signedIn)
-            return "Signing in to Pandora…"
+            return "Signing in…"
           return root.playlistsLoaded ? "No playlists yet." : "Loading playlists…"
         }
         color: root.theme.muted
@@ -670,7 +670,7 @@ Item {
           if (!root.engine.online)
             return "Starting the player engine…"
           if (!root.engine.signedIn)
-            return root.player.notice !== "" ? root.player.notice : "Signing in to Pandora…"
+            return root.player.notice !== "" ? root.player.notice : "Signing in…"
           return root.player.stationsLoaded ? "No stations yet. Search for an artist or song to start one." : "Loading stations…"
         }
         color: root.theme.muted

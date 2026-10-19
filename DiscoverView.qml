@@ -224,7 +224,7 @@ Item {
       Label {
         anchors.verticalCenter: parent.verticalCenter
         visible: root.pending > 0
-        text: "Matching " + root.pending + " to Pandora…"
+        text: "Finding " + root.pending + " in the catalog…"
         color: root.theme.muted
         font.pixelSize: Style.font.bodySmall
       }
@@ -383,7 +383,7 @@ Item {
           Label {
             visible: cardItem.chipList.length === 0
             y: Style.space(6)
-            text: cardItem.modelData.resolved ? "Not on Pandora" : "Looking it up…"
+            text: cardItem.modelData.resolved ? "Not in the catalog" : "Looking it up…"
             color: root.theme.faint
             font.pixelSize: Style.font.caption
           }

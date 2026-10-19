@@ -168,7 +168,7 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
             let user = arg(request, "user")?.trim();
             let password = arg(request, "password")?;
             if user.is_empty() || password.is_empty() {
-                return Err(anyhow!("Enter your Pandora email and password."));
+                return Err(anyhow!("Enter your email and password."));
             }
             // Checked here, on the request's own thread, so the form hears
             // whether Pandora accepted it.
@@ -183,11 +183,11 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         }
         "image" => Ok(json!({ "path": discover::image(arg(request, "url")?)?.to_string_lossy() })),
         "discover" => {
-            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in to Pandora"))?;
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             Ok(discover::snapshot(pandora, request["refresh"].as_bool().unwrap_or(false)))
         }
         "stations" | "modes" | "setMode" => {
-            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in to Pandora"))?;
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             match cmd {
                 "stations" => radio::stations(&pandora),
                 "modes" => radio::modes(&pandora, arg(request, "station")?),
@@ -203,7 +203,7 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
             }
         }
         "search" | "artist" | "album" | "playlists" | "playlist" => {
-            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in to Pandora"))?;
+            let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             match cmd {
                 "search" => catalog::search(&pandora, arg(request, "query")?),
                 "artist" => catalog::artist_page(&pandora, arg(request, "id")?),

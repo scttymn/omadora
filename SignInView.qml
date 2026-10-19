@@ -20,7 +20,7 @@ Rectangle {
       return
     var user = emailField.input.text.trim()
     if (user === "" || passwordField.input.text === "") {
-      error = "Enter your Pandora email and password."
+      error = "Enter your email and password."
       return
     }
     working = true
@@ -31,7 +31,7 @@ Rectangle {
         passwordField.input.text = ""
         return
       }
-      root.error = String(result || "Pandora did not answer. Try again.")
+      root.error = String(result || "The sign-in got no answer. Try again.")
       passwordField.input.forceActiveFocus()
       passwordField.input.selectAll()
     })
@@ -47,6 +47,9 @@ Rectangle {
     property alias input: textInput
     property string placeholder: ""
     property bool secret: false
+    // Where Tab and Shift+Tab go.
+    property Item tabTo: null
+    property Item backTo: null
     signal accepted()
     width: parent.width
     height: Style.space(40)
@@ -72,6 +75,9 @@ Rectangle {
       echoMode: field.secret ? TextInput.Password : TextInput.Normal
       enabled: !root.working
       onAccepted: field.accepted()
+      activeFocusOnTab: true
+      KeyNavigation.tab: field.tabTo
+      KeyNavigation.backtab: field.backTo
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
@@ -109,7 +115,7 @@ Rectangle {
     Text {
       width: parent.width
       textFormat: Text.PlainText
-      text: "Sign in with your Pandora account."
+      text: "Sign in to Omadora."
       color: root.theme.fg
       font.family: root.fontFamily
       font.pixelSize: Style.font.body
@@ -120,6 +126,8 @@ Rectangle {
     Field {
       id: emailField
       placeholder: "Email"
+      tabTo: passwordField.input
+      backTo: passwordField.input
       onAccepted: passwordField.input.forceActiveFocus()
     }
 
@@ -127,6 +135,8 @@ Rectangle {
       id: passwordField
       placeholder: "Password"
       secret: true
+      tabTo: emailField.input
+      backTo: emailField.input
       onAccepted: root.submit()
     }
 
@@ -170,7 +180,7 @@ Rectangle {
     Text {
       width: parent.width
       textFormat: Text.PlainText
-      text: "Your password is kept in your system keyring, and is only ever sent to Pandora."
+      text: "Your password stays in your system keyring."
       color: root.theme.faint
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

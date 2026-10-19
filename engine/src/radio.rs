@@ -170,10 +170,9 @@ pub fn playback_resumed(pandora: &Pandora, take_over: bool) -> Result<()> {
     Ok(())
 }
 
-fn busy_message(found: &Value) -> String {
-    let header = found["dialogueHeader"].as_str().unwrap_or("Someone else is listening to your Pandora account");
-    let prompt = found["dialoguePrompt"].as_str().unwrap_or("Only one person can listen at a time.");
-    format!("{}. {}", header.trim_end_matches('.'), prompt)
+/// Omadora's own words, not Pandora's dialogue, which names its apps.
+fn busy_message(_found: &Value) -> String {
+    "Someone else is listening on your account. Only one person can listen at a time.".to_string()
 }
 
 pub fn playback_paused(pandora: &Pandora) {

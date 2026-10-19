@@ -32,7 +32,7 @@ fn home() -> PathBuf {
 }
 
 /// The sign-in error when no account is saved; the widget then asks for one.
-pub const NO_ACCOUNT: &str = "No Pandora account is saved yet";
+pub const NO_ACCOUNT: &str = "No account is saved yet";
 
 fn config_dir() -> PathBuf {
     let base = std::env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home().join(".config"));
@@ -113,7 +113,7 @@ fn remember(user: &str, password: &str) -> Result<()> {
     use std::process::Stdio;
     let _ = Command::new("secret-tool").args(["clear", "application", "omadora"]).output();
     let mut child = Command::new("secret-tool")
-        .args(["store", "--label=Omadora: Pandora account"])
+        .args(["store", "--label=Omadora account"])
         .args(keyring_entry(user))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -199,7 +199,7 @@ fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, 
         .send()?
         .json()?;
     if partner["stat"] != "ok" {
-        bail!("Pandora refused the device sign-in ({})", partner["message"].as_str().unwrap_or("no reason given"));
+        bail!("The device sign-in was refused ({})", partner["message"].as_str().unwrap_or("no reason given"));
     }
     let result = &partner["result"];
     let sync = decrypt(result["syncTime"].as_str().unwrap_or_default())?;
@@ -231,9 +231,9 @@ fn device_sign_in(http: &Client, user: &str, password: &str) -> Result<(String, 
     if login["stat"] != "ok" {
         // 1002 is wrong credentials; anything else is Pandora's own message.
         if login["code"] == 1002 {
-            bail!("Pandora did not accept the email and password");
+            bail!("That email and password didn't work.");
         }
-        bail!("Pandora refused the sign-in ({})", login["message"].as_str().unwrap_or("no reason given"));
+        bail!("The sign-in was refused ({})", login["message"].as_str().unwrap_or("no reason given"));
     }
     let result = &login["result"];
     let token = result["userAuthToken"].as_str().ok_or_else(|| anyhow!("sign-in returned no token"))?.to_string();
@@ -266,7 +266,7 @@ impl PandoraError {
 
 impl std::fmt::Display for PandoraError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Pandora {} failed: HTTP {}, {}", self.path, self.status, self.message)
+        write!(f, "{} failed: HTTP {}, {}", self.path, self.status, self.message)
     }
 }
 

@@ -396,7 +396,7 @@ impl Engine {
                 self.waiting_for_more = false;
                 if self.queue.is_empty() {
                     self.status = Status::Idle;
-                    self.fail("Pandora sent nothing to play on this station.".into());
+                    self.fail("Nothing came back to play on this station.".into());
                 } else {
                     self.load(0);
                 }
@@ -642,10 +642,10 @@ impl Engine {
         let found = self.shared.pandora();
         if found.is_none() {
             if self.needs_account {
-                self.fail("Sign in to Pandora first.".into());
+                self.fail("Sign in first.".into());
             } else {
                 self.sign_in();
-                self.fail("Still signing in to Pandora.".into());
+                self.fail("Still signing in.".into());
             }
         }
         found
@@ -1053,7 +1053,7 @@ fn fetch(pandora: &Pandora, track: &Value, source: &str) -> anyhow::Result<Loade
         "v1/ondemand/getAudioPlaybackInfo",
         json!({ "pandoraId": id, "sourcePandoraId": source, "deviceCode": "", "includeAudioToken": true }),
     )?;
-    let url = info["audioURL"].as_str().ok_or_else(|| anyhow::anyhow!("Pandora sent no audio for this track"))?;
+    let url = info["audioURL"].as_str().ok_or_else(|| anyhow::anyhow!("No audio came back for this track"))?;
     let bytes = pandora.download(url)?;
     Ok(Loaded {
         bytes: Arc::new(bytes),

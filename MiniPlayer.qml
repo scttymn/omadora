@@ -13,8 +13,8 @@ Item {
   signal artistRequested()
   signal albumRequested()
 
-  readonly property string stationLabel: player.sourceLabel !== "" ? player.sourceLabel : "Pandora"
-  readonly property bool showNotice: player.title === "" && (player.notice !== "" || player.needsAccount)
+  readonly property string stationLabel: player.sourceLabel !== "" ? player.sourceLabel : "Omadora"
+  readonly property bool showNotice: player.title === "" && player.notice !== ""
 
   Rectangle {
     anchors.fill: parent
@@ -115,8 +115,6 @@ Item {
           text: {
             if (root.player.title !== "")
               return root.player.title
-            if (root.player.needsAccount)
-              return "Sign in with your Pandora account to start listening."
             if (root.player.notice !== "")
               return root.player.notice
             if (root.player.loading)
@@ -174,35 +172,7 @@ Item {
           }
         }
 
-        // No account yet: the form is in the full player, where typing works.
-        Rectangle {
-          visible: root.player.needsAccount
-          width: signInLabel.implicitWidth + Style.space(24)
-          height: Style.space(28)
-          radius: Style.cornerRadius
-          color: signInArea.containsMouse ? Qt.lighter(root.theme.accent, 1.08) : root.theme.accent
-
-          Text {
-            id: signInLabel
-            anchors.centerIn: parent
-            textFormat: Text.PlainText
-            text: "Sign in"
-            color: root.theme.accentText
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-          }
-
-          MouseArea {
-            id: signInArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.expandRequested()
-          }
-        }
-
-        // Another device has the account; Pandora's apps offer the same.
+        // Another device has the account; the official apps offer the same.
         Rectangle {
           visible: root.player.busy
           width: listenLabel.implicitWidth + Style.space(24)
@@ -390,6 +360,72 @@ Item {
           track: root.theme.raised
           fill: root.theme.fg
           onSeeked: function (fraction) { root.player.setVolume(fraction) }
+        }
+      }
+    }
+
+    // No account yet: only a prompt. The form is in the full player, where
+    // typing works.
+    Rectangle {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: header.bottom
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: Style.space(8)
+      visible: root.player.needsAccount
+      color: root.theme.surface
+
+      MouseArea {
+        anchors.fill: parent
+      }
+
+      Column {
+        anchors.centerIn: parent
+        width: parent.width - Style.space(48)
+        spacing: Style.space(16)
+
+        OmadoraMark {
+          anchors.horizontalCenter: parent.horizontalCenter
+          size: Style.space(44)
+          color: root.theme.accent
+        }
+
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          text: "Sign in to start listening."
+          color: root.theme.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.WordWrap
+        }
+
+        Rectangle {
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: signInLabel.implicitWidth + Style.space(40)
+          height: Style.space(36)
+          radius: Style.cornerRadius
+          color: signInArea.containsMouse ? Qt.lighter(root.theme.accent, 1.08) : root.theme.accent
+
+          Text {
+            id: signInLabel
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: "Sign in"
+            color: root.theme.accentText
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+
+          MouseArea {
+            id: signInArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.expandRequested()
+          }
         }
       }
     }
