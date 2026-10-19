@@ -86,7 +86,13 @@ omarchy plugin add https://github.com/scttymn/omadora.git --enable
 
 On first start, the widget downloads the Omadora engine for this version from the project's [GitHub releases](https://github.com/scttymn/omadora/releases) into `~/.local/share/omadora/engine/`, and uses it only if it matches the SHA-256 recorded in `engine-release.json`. `omarchy plugin update scttymn.omadora` brings a new version; the widget then fetches its engine and restarts it. Radio needs ffmpeg, which is part of Omarchy. Engines are released for x86_64 and aarch64.
 
-To remove it: `omarchy plugin remove scttymn.omadora`. Signing out first also clears the saved account from the keyring.
+To remove it:
+
+```bash
+omarchy plugin remove scttymn.omadora
+```
+
+Removing the plugin runs none of its code, so your Pandora password stays in the desktop keyring (GNOME Keyring, which Omarchy runs). Sign out in the player first, or clear it afterwards with `secret-tool clear application omadora`. Omadora's other files are in `~/.config/omadora`, `~/.local/state/omadora`, `~/.local/share/omadora` (the downloaded engine), and `~/.cache/omadora`.
 
 ## Sign in
 
