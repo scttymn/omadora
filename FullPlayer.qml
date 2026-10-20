@@ -1375,23 +1375,33 @@ Item {
       }
     }
 
-    // A page: beside up next under Now Playing, else the whole window.
-    BrowseView {
-      anchors.top: header.bottom
-      anchors.bottom: nowBar.top
-      anchors.left: parent.left
-      anchors.right: root.section === "now" ? queueCol.left : parent.right
-      visible: root.page !== null
-      engine: root.engine
-      player: root.player
-      theme: root.theme
-      fontFamily: root.fontFamily
-      page: root.page || ({ kind: "search", query: "" })
-      canGoBack: root.pageStack.length > 0 || root.start(root.section) === null
-      localStations: root.view === "search" ? root.searchStations : []
-      onBack: root.back()
-      onOpen: function (next) { root.open(next) }
-      onStationPicked: function (station) { root.playStation(station) }
+    // A page: beside up next under Now Playing, else the whole window. Each
+    // place has its own view, hidden rather than destroyed while another is
+    // chosen, so going back finds its page with the pictures still decoded
+    // (Qt keeps few it no longer shows).
+    Repeater {
+      model: ["now", "discover", "browse", "collection", "podcasts"]
+
+      delegate: BrowseView {
+        required property string modelData
+        readonly property bool here: root.section === modelData
+        readonly property var placePage: here ? root.page : (root.places[modelData] ? root.places[modelData].page : null)
+        anchors.top: header.bottom
+        anchors.bottom: nowBar.top
+        anchors.left: parent.left
+        anchors.right: modelData === "now" ? queueCol.left : parent.right
+        visible: here && root.page !== null
+        engine: root.engine
+        player: root.player
+        theme: root.theme
+        fontFamily: root.fontFamily
+        page: placePage || ({ kind: "search", query: "" })
+        canGoBack: here && (root.pageStack.length > 0 || root.start(root.section) === null)
+        localStations: here && root.view === "search" ? root.searchStations : []
+        onBack: root.back()
+        onOpen: function (next) { root.open(next) }
+        onStationPicked: function (station) { root.playStation(station) }
+      }
     }
 
     DiscoverView {

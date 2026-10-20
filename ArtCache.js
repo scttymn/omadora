@@ -56,6 +56,16 @@ function resolve(url, done) {
     }
     waiting[url] = [done]
     engine.request("art", { url: url }, function (ok, result) {
+        // The engine stopped before answering: ask again once it's back, as
+        // if it had been asked before it was up. Pages stay built while
+        // hidden, so nothing else would ask for this picture again.
+        if (!ok && !engine.online) {
+            var stranded = waiting[url] || []
+            delete waiting[url]
+            for (var j = 0; j < stranded.length; j++)
+                later.push({ url: url, done: stranded[j] })
+            return
+        }
         var shown = ok && result && result.path ? "file://" + result.path : ""
         // A failure isn't kept: the next picture to ask tries again.
         if (shown !== "")
