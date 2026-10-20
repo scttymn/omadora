@@ -28,6 +28,37 @@ pub fn account_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// A folder only this user can enter: made so (with any missing parents
+/// under it) if it isn't there, and closed up if it is. For caches of what
+/// the listener plays and sees.
+pub fn private_dir(dir: &Path) -> std::io::Result<()> {
+    if fs::symlink_metadata(dir).is_err() {
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    let meta = fs::symlink_metadata(dir)?;
+    if !meta.is_dir() {
+        return Err(std::io::Error::other("not a folder"));
+    }
+    if meta.mode() & 0o077 != 0 {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Close up the engine's caches if they're there: those made before they
+/// were kept private may still be readable by others.
+pub fn close_caches() {
+    let base = std::env::var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache"));
+    let root = base.join("omadora");
+    for dir in [root.clone(), root.join("images"), root.join("episodes")] {
+        if fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+            let _ = private_dir(&dir);
+        }
+    }
+}
+
 fn uid() -> u32 {
     fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(u32::MAX)
 }

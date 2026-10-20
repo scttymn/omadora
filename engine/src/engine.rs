@@ -257,6 +257,7 @@ pub fn start() -> anyhow::Result<Arc<Shared>> {
         subscribers: Mutex::new(Vec::new()),
         commands: Mutex::new(tx.clone()),
     });
+    crate::files::close_caches();
     let audio = Audio::open()?;
     let mut engine = Engine {
         shared: shared.clone(),
@@ -372,6 +373,7 @@ impl Engine {
                 self.signing_in = false;
                 match result {
                     Ok(pandora) => {
+                        crate::collection::forget_account();
                         *self.shared.pandora.write().unwrap() = Some(pandora);
                         self.needs_account = false;
                         self.retry_sign_in = None;
@@ -415,6 +417,7 @@ impl Engine {
             }
             Cmd::SignedOut => {
                 // The account is forgotten already; drop everything it played.
+                crate::collection::forget_account();
                 self.generation += 1;
                 self.stop_audio();
                 self.clock.set(0.0, false);

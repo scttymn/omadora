@@ -62,11 +62,14 @@ struct Mine {
 
 /// The collection by artist, kept for a minute (and dropped when something
 /// is collected or taken out): the Artists tab and every artist page read it.
-static INDEX: Mutex<Option<(Instant, Arc<BTreeMap<String, Mine>>)>> = Mutex::new(None);
+/// It's tagged with the account it was read for: one read for another
+/// account, or finishing after a switch, is never used.
+static INDEX: Mutex<Option<(Instant, Option<String>, Arc<BTreeMap<String, Mine>>)>> = Mutex::new(None);
 
 fn index(pandora: &Pandora) -> Result<Arc<BTreeMap<String, Mine>>> {
-    if let Some((at, index)) = INDEX.lock().unwrap().as_ref() {
-        if at.elapsed() < Duration::from_secs(60) {
+    let owner = crate::pandora::saved_user();
+    if let Some((at, whose, index)) = INDEX.lock().unwrap().as_ref() {
+        if *whose == owner && at.elapsed() < Duration::from_secs(60) {
             return Ok(index.clone());
         }
     }
@@ -153,7 +156,10 @@ fn index(pandora: &Pandora) -> Result<Arc<BTreeMap<String, Mine>>> {
         mine.songs.push(track);
     }
     let index = Arc::new(by_artist);
-    *INDEX.lock().unwrap() = Some((Instant::now(), index.clone()));
+    // Kept only if the account is still the one it was read for.
+    if crate::pandora::saved_user() == owner {
+        *INDEX.lock().unwrap() = Some((Instant::now(), owner, index.clone()));
+    }
     Ok(index)
 }
 
@@ -302,6 +308,13 @@ fn removed_lately(id: &str) -> bool {
     let mut removed = REMOVED.lock().unwrap();
     removed.retain(|(at, _)| at.elapsed() < PENDING_FOR);
     removed.iter().any(|(_, r)| r == id)
+}
+
+/// Another account (or none): what was kept for the last one goes.
+pub fn forget_account() {
+    *INDEX.lock().unwrap() = None;
+    PENDING.lock().unwrap().clear();
+    REMOVED.lock().unwrap().clear();
 }
 
 /// Something was collected, liked, or taken out: read the collection again

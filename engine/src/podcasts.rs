@@ -75,18 +75,21 @@ static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .timeout(Duration::from_secs(30))
         .redirect(redirects())
         .build()
-        .unwrap_or_default()
+        // Never fall back to a client without the public-address checks.
+        .expect("building the public-only web client")
 });
 
-// Episodes take as long as they take; only connecting is timed.
+// Episodes take a while: two hours to download one before it's given up
+// (the size is capped too; see `stream`).
 static AUDIO_HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
     crate::net::public_client()
         .user_agent(format!("{USER_AGENT} podcast player (+https://github.com/scttymn/omadora)"))
         .connect_timeout(Duration::from_secs(20))
-        .timeout(None)
+        .timeout(Duration::from_secs(2 * 60 * 60))
         .redirect(redirects())
         .build()
-        .unwrap_or_default()
+        // Never fall back to a client without the public-address checks.
+        .expect("building the public-only web client")
 });
 
 fn get_json(request: reqwest::blocking::RequestBuilder) -> Result<Value> {

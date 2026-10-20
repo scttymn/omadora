@@ -3,13 +3,19 @@
 //! decoder reads that file as it fills, waiting for bytes that haven't
 //! arrived yet. A download cut short picks up where it stopped next time.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+/// No episode is bigger than this; a feed whose audio is (or never ends)
+/// is cut off rather than filling the disk.
+const MAX_BYTES: u64 = 1 << 30;
+/// Nor takes longer than this to download, however it trickles in.
+const MAX_TIME: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
 
 #[derive(Default)]
 struct Progress {
@@ -68,8 +74,12 @@ impl Download {
             });
             return Ok(Arc::new(Self { inner, path }));
         }
+        // Its folder and the cache's own (~/.cache/omadora) both private.
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+            if let Some(cache) = dir.parent() {
+                crate::files::private_dir(cache)?;
+            }
+            crate::files::private_dir(dir)?;
         }
         let part = part_of(&path);
         let have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
@@ -90,7 +100,13 @@ impl Download {
         } else {
             response.content_length()
         };
-        let mut file = File::options().create(true).write(true).append(resumed).truncate(!resumed).open(&part).context("opening the episode's cache file")?;
+        let mut file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            File::options().create(true).write(true).append(resumed).truncate(!resumed).mode(0o600).open(&part).context("opening the episode's cache file")?
+        };
+        if total.is_some_and(|t| t > MAX_BYTES) {
+            bail!("this episode is too large");
+        }
         let start = if resumed { have } else { 0 };
         inner.update(|p| {
             p.written = start;
@@ -100,14 +116,21 @@ impl Download {
         std::thread::spawn(move || {
             let mut response = response;
             let mut buf = vec![0u8; 64 * 1024];
+            let began = std::time::Instant::now();
             let result = (|| -> Result<()> {
                 loop {
+                    if began.elapsed() > MAX_TIME {
+                        return Err(anyhow!("this episode took too long to download"));
+                    }
                     if inner.cancelled.load(Ordering::SeqCst) {
                         return Err(anyhow!("stopped"));
                     }
                     let n = response.read(&mut buf)?;
                     if n == 0 {
                         return Ok(());
+                    }
+                    if inner.progress.lock().unwrap().written + n as u64 > MAX_BYTES {
+                        return Err(anyhow!("this episode is too large"));
                     }
                     file.write_all(&buf[..n])?;
                     inner.update(|p| p.written += n as u64);

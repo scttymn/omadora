@@ -37,8 +37,8 @@
 //!   subscribe {key, add}           follow a show, or stop
 //!   markPlayed {id, played}        mark an episode played or not
 //!   discover {refresh?}            magazine articles, matched to albums, songs, artists
-//!   image {url}                    an article's picture as a local file, cached
 //!   art {url}                      any artwork as a local file, cached
+//!   openLink {url}                 where an article link leads, checked public at every hop
 //!   recommend {fresh?}             songs like the one playing, from the AI agent
 //!   agents                         the AI agent in use, its model and effort, and the choices
 //!   setAi {model?, effort?}        Omadora's model or effort for that agent (null: the agent's own)
@@ -177,6 +177,9 @@ fn respond(shared: &Shared, request: &Value, out: &Sender<String>) {
     }
     let catalog = matches!(cmd, "search" | "artist" | "album" | "playlist" | "playlists" | "recommend" | "discover");
     let on_demand = shared.pandora().is_none_or(|p| p.account().on_demand);
+    // Where this answer is saved, decided now: an account switched while it
+    // was fetched doesn't get the old account's answer.
+    let (asked_by, save_to) = (crate::pandora::saved_user(), saved_path(request));
     let reply = match handle(shared, request).map(|mut result| {
         if catalog && !on_demand {
             radio_only(&mut result);
@@ -184,7 +187,7 @@ fn respond(shared: &Shared, request: &Value, out: &Sender<String>) {
         result
     }) {
         Ok(result) => {
-            if let Some(path) = saved_path(request) {
+            if let Some(path) = save_to.filter(|_| crate::pandora::saved_user() == asked_by) {
                 let _ = crate::files::write_private(&path, result.to_string().as_bytes());
             }
             json!({ "req": req, "ok": true, "result": result })
@@ -266,8 +269,8 @@ fn handle(shared: &Shared, request: &Value) -> Result<Value> {
         }
         "agents" => Ok(crate::recommend::agents()),
         "setAi" => crate::recommend::set_ai(request),
-        "image" => Ok(json!({ "path": discover::image(arg(request, "url")?)?.to_string_lossy() })),
         "art" => Ok(json!({ "path": discover::artwork(arg(request, "url")?)?.to_string_lossy() })),
+        "openLink" => Ok(json!({ "url": crate::net::checked_link(arg(request, "url")?)? })),
         "discover" => {
             let pandora = shared.pandora().ok_or_else(|| anyhow!("still signing in"))?;
             Ok(discover::snapshot(pandora, request["refresh"].as_bool().unwrap_or(false)))

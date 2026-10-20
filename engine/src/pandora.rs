@@ -308,7 +308,9 @@ impl Pandora {
 
     fn connect(given: Option<(&str, &str)>) -> Result<Arc<Self>> {
         let jar = Arc::new(Jar::default());
-        let http = Client::builder()
+        // Audio, receipt, and skip addresses come from Pandora's answers:
+        // like every other outside address, public ones only.
+        let http = crate::net::public_client()
             .cookie_provider(jar.clone())
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(30))
@@ -446,15 +448,32 @@ impl Pandora {
 
     /// Download a whole file, such as a track's audio.
     pub fn download(&self, url: &str) -> Result<Vec<u8>> {
+        use std::io::Read;
+        // A song or an ad is a few megabytes; nothing near this.
+        const MAX_AUDIO: u64 = 100 << 20;
+        if !crate::net::public_url(url) {
+            bail!("audio isn't on the public web");
+        }
         let resp = self.http.get(url).timeout(Duration::from_secs(120)).send().map_err(reqwest::Error::without_url)?;
         if !resp.status().is_success() {
             bail!("audio download failed: HTTP {}", resp.status());
         }
-        Ok(resp.bytes()?.to_vec())
+        if resp.content_length().is_some_and(|len| len > MAX_AUDIO) {
+            bail!("audio download too large");
+        }
+        let mut bytes = Vec::new();
+        resp.take(MAX_AUDIO + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_AUDIO {
+            bail!("audio download too large");
+        }
+        Ok(bytes)
     }
 
     /// Fire-and-forget GET, for play receipts.
     pub fn ping(&self, url: &str) {
+        if !crate::net::public_url(url) {
+            return;
+        }
         let _ = self.http.get(url).timeout(Duration::from_secs(15)).send();
     }
 }

@@ -30,11 +30,16 @@ Item {
   }
   // Filters pick among the feeds with pictures; text-only stories are all
   // in the Headlines rail, whatever the filter.
-  // Articles open in the browser, and only web addresses: the engine drops
-  // anything else, and this checks again.
+  // Articles open in the browser, once the engine has followed the link
+  // and found it, and every redirect on the way, on the public web. The
+  // browser gets where it ends up; anything else opens nothing.
   function openLink(link) {
-    if (/^https?:\/\//i.test(String(link || "")))
-      Qt.openUrlExternally(link)
+    if (!/^https?:\/\//i.test(String(link || "")))
+      return
+    root.engine.request("openLink", { url: link }, function (ok, result) {
+      if (ok && /^https?:\/\//i.test(String(result.url || "")))
+        Qt.openUrlExternally(result.url)
+    })
   }
 
   readonly property var withPictures: items.filter(function (i) { return i.image !== "" })
@@ -283,24 +288,6 @@ Item {
       height: grid.cellHeight
       readonly property var where: root.source(modelData.feed)
       readonly property var chipList: root.chips(modelData)
-      // The cover from the engine's disk cache, so each is downloaded once.
-      // If the engine can't or won't fetch it, the card keeps its swatch.
-      readonly property string remote: modelData.image
-      property string cover: ""
-      onRemoteChanged: loadCover()
-      Component.onCompleted: loadCover()
-      function loadCover() {
-        var wanted = remote
-        cover = ""
-        var card = cardItem
-        root.engine.request("image", { url: wanted }, function (ok, result) {
-          // The card may have scrolled away and been destroyed meanwhile.
-          try {
-            if (card && wanted === card.remote)
-              card.cover = ok ? "file://" + result.path : ""
-          } catch (e) {}
-        })
-      }
 
       Column {
         x: grid.gap / 2
@@ -312,7 +299,9 @@ Item {
           height: width
           rings: false
           art: root.theme.raised
-          artUrl: cardItem.cover
+          // From the engine's disk cache, as all artwork is; the card keeps
+          // its swatch when the engine can't or won't fetch it.
+          artUrl: cardItem.modelData.image
 
           MouseArea {
             anchors.fill: parent

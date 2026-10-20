@@ -225,6 +225,10 @@ struct Fetched {
 }
 
 fn read_feed(http: &reqwest::blocking::Client, feed: &Feed, last: Option<&Fetched>) -> anyhow::Result<Fetched> {
+    // A feed in feeds.toml written as a local address is refused too.
+    if !public_host(&feed.url) {
+        anyhow::bail!("not a feed on the public web");
+    }
     let mut request = http.get(&feed.url);
     if let Some(last) = last {
         if let Some(etag) = &last.etag {
@@ -256,7 +260,7 @@ fn parse_feed(feed: &Feed, bytes: &[u8]) -> anyhow::Result<Vec<Article>> {
         .filter_map(|e| {
             // Only web links: the widget opens them, and a feed could name
             // a file or another app's URL scheme instead.
-            let link = e.links.first().map(|l| l.href.clone()).filter(|l| web_url(l)).unwrap_or_default();
+            let link = e.links.first().map(|l| l.href.clone()).filter(|l| web_url(l) && public_host(l)).unwrap_or_default();
             let title = e.title.map(|t| strip_html(&t.content)).unwrap_or_default();
             if title.is_empty() || link.is_empty() {
                 return None;
@@ -596,14 +600,7 @@ fn save_cache(state: &State) {
         .iter()
         .filter_map(|a| state.matches.get(&a.id).map(|m| (a.id.clone(), json!(m))))
         .collect();
-    let path = cache_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, Value::Object(live).to_string()).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    let _ = crate::files::write_private(&cache_path(), Value::Object(live).to_string().as_bytes());
 }
 
 fn refresh(force: bool) {
@@ -787,20 +784,10 @@ pub fn web_url(url: &str) -> bool {
     reqwest::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
 }
 
-/// A web address that may be fetched: not this machine or the local
-/// network by name, and, for an address written as an IP, a public one.
-/// (Names are checked again where they resolve: see `net`.)
+/// A web address that may be fetched (see `net::public_url`; names are
+/// checked again where they resolve).
 pub(crate) fn public_host(url: &str) -> bool {
-    let Ok(u) = reqwest::Url::parse(url) else { return false };
-    match u.host() {
-        Some(url::Host::Domain(name)) => {
-            let name = name.to_ascii_lowercase();
-            !(name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") || name.ends_with(".internal"))
-        }
-        Some(url::Host::Ipv4(ip)) => crate::net::public_ip(ip.into()),
-        Some(url::Host::Ipv6(ip)) => crate::net::public_ip(ip.into()),
-        None => false,
-    }
+    crate::net::public_url(url)
 }
 
 /// A response body, refused once it passes `max` bytes rather than read
@@ -819,16 +806,6 @@ pub(crate) fn read_capped(response: reqwest::blocking::Response, max: u64) -> an
 }
 
 static DOWNLOADS: LazyLock<(Mutex<usize>, Condvar)> = LazyLock::new(|| (Mutex::new(0), Condvar::new()));
-
-/// A Discover article's picture as a local file, downloading it the first
-/// time. Only pictures of the articles on hand are fetched.
-pub fn image(url: &str) -> anyhow::Result<PathBuf> {
-    let known = STATE.lock().unwrap().articles.iter().any(|a| a.image == url);
-    if !known || !web_url(url) || !public_host(url) {
-        anyhow::bail!("not a Discover picture");
-    }
-    cached_image(url)
-}
 
 /// Album, artist, show, and episode art as a local file, so pages that
 /// open from what was saved have their pictures at once too. Any picture
@@ -881,10 +858,11 @@ fn cached_image(url: &str) -> anyhow::Result<PathBuf> {
             anyhow::bail!("not a picture");
         }
         let bytes = read_capped(response, IMAGE_MAX_BYTES).map_err(|_| anyhow::anyhow!("picture too large"))?;
-        std::fs::create_dir_all(&dir)?;
-        let tmp = path.with_extension(format!("{}.part", std::process::id()));
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &path)?;
+        if let Some(cache) = dir.parent() {
+            crate::files::private_dir(cache)?;
+        }
+        crate::files::private_dir(&dir)?;
+        crate::files::write_private(&path, &bytes)?;
         Ok(path.clone())
     })();
     *count.lock().unwrap() -= 1;
@@ -907,7 +885,8 @@ static IMAGE_HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .timeout(Duration::from_secs(20))
         .redirect(policy)
         .build()
-        .unwrap_or_default()
+        // Never fall back to a client without the public-address checks.
+        .expect("building the public-only web client")
 });
 
 #[cfg(test)]

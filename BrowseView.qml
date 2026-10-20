@@ -45,6 +45,19 @@ Item {
   // again when they can.
   property var live: ({})
 
+  // Another account: nothing read for the last one shows.
+  Connections {
+    target: root.engine
+    function onUserChanged() {
+      root.cache = ({})
+      root.live = ({})
+      root.loaded = null
+      root.loadedKey = ""
+      if (root.visible)
+        root.load()
+    }
+  }
+
   // Connected, then signed in: what was saved shows, then fresh pages.
   Connections {
     target: root.engine
