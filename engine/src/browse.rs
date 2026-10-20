@@ -11,6 +11,12 @@ const ART_HOST: &str = "https://content-images.p-cdn.com/";
 /// Pictures come from Pandora's own image hosts, or not at all.
 fn picture(image: &Value) -> String {
     if let Some(id) = image["artId"].as_str().filter(|id| !id.is_empty() && !id.contains("..")) {
+        // A file is served as it is. A playlist's is a collage recipe, or a
+        // folder of sizes, that only Pandora's image service renders.
+        let file = id.rsplit('/').next().is_some_and(|name| name.contains('.')) && !id.contains(';');
+        if !file {
+            return crate::catalog::thor(&json!(id.trim_start_matches('/')), 500);
+        }
         return format!("{ART_HOST}{}", id.trim_start_matches('/'));
     }
     let full = image["fullUrl"].as_str().unwrap_or_default();
@@ -56,7 +62,7 @@ fn tile(item: &Value, annotations: &Map<String, Value>) -> Option<Value> {
         "kind": kind,
         "title": title,
         "detail": detail,
-        "art": picture(&item["image"]),
+        "art": if kind == "playlist" { crate::catalog::steady_art(&json!(id), picture(&item["image"])) } else { picture(&item["image"]) },
         "color": color,
         "artist": about["artistName"].as_str().unwrap_or_default(),
         "artistId": about["artistId"].as_str().unwrap_or_default(),
@@ -114,6 +120,9 @@ mod tests {
         assert_eq!(picture(&json!({ "fullUrl": "https://www.pandora.com/img/browse_activities/BA44.jpg" })), "https://www.pandora.com/img/browse_activities/BA44.jpg");
         assert_eq!(picture(&json!({ "fullUrl": "https://evil.example/x.png" })), "");
         assert_eq!(picture(&json!({ "fullUrl": "http://www.pandora.com/x.png" })), "");
+        assert_eq!(picture(&json!({ "artId": "images/44/f1/66/7e7a/" })), "https://dyn-images.p-cdn.com/?l=images%2F44%2Ff1%2F66%2F7e7a%2F&w=500&h=500");
+        assert!(picture(&json!({ "artId": "images/thor_assets/x/theme_TH-4-1;grid(images/b/@1/3,images/a/@1/3);overlay($0)" }))
+            .starts_with("https://dyn-images.p-cdn.com/?l=images%2Fthor_assets%2Fx%2Ftheme_TH-4-1%3Bgrid%28images%2Fa%2F%401%2F3%2Cimages%2Fb%2F"));
     }
 
     #[test]
