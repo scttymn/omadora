@@ -5,7 +5,7 @@
   "version": "0.5.3",
   "author": "scttymn",
   "license": "MIT",
-  "description": "Pandora in the Omarchy bar: radio, albums, playlists, and songs, with artist pages.",
+  "description": "Pandora in the Omarchy bar: radio, albums, playlists, and songs with artist pages; podcasts from Pandora, Apple, and your own feeds; and music news from magazines' RSS feeds.",
   "kinds": [
     "bar-widget"
   ],

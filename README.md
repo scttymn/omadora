@@ -1,6 +1,6 @@
 # Omadora
 
-Pandora in the Omarchy bar.
+Pandora in the Omarchy bar, with podcasts from Pandora, Apple, and your own feeds, and music news from magazines' RSS feeds.
 
 > Omadora is an unofficial, personal project. It is not affiliated with,
 > endorsed by, or supported by Pandora Media or SiriusXM. It talks to
