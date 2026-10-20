@@ -202,7 +202,10 @@ pub fn fragment(pandora: &Pandora, station_id: &str, starting: bool) -> Result<V
             "stationId": station_id,
             "isStationStart": starting,
             "fragmentRequestReason": "Normal",
-            "audioFormat": "aacplus",
+            // The best the account may hear: 192 kbps MP3 for Plus and
+            // Premium. Pandora answers with 64 kbps HE-AAC ("aacplus") when
+            // the account can't have it, and either plays.
+            "audioFormat": "mp3-hifi",
             "startingAtTrackId": null,
             "onDemandArtistMessageArtistUidHex": null,
             "onDemandArtistMessageIdHex": null,
