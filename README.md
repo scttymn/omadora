@@ -17,7 +17,7 @@ Pandora in the Omarchy bar.
 
 <p align="center"><img src="docs/widget.png" width="410" alt="The mini player, opened from the bar"></p>
 
-The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport). The expand control opens the full player as a regular window that Hyprland tiles like any other app. Its header has four places: Discover (where it opens), Browse, Music (your stations, playlists, and artists), and Podcasts. Each keeps its own pages, so going back to one finds you where you left it; choosing the one you're in takes you back to its start. What's playing is in a strip along the bottom; click it for the track itself, with up next, history, and AI beside it. The shrink control returns to the mini player. Colors come from the active Omarchy theme.
+The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport), or, with nothing playing, the full player. The expand control opens the full player as a regular window that Hyprland tiles like any other app. Its header has four places: Discover (where it opens), Browse, Music (your stations, playlists, and artists), and Podcasts. Each keeps its own pages, so going back to one finds you where you left it; choosing the one you're in takes you back to its start. What's playing is in a strip along the bottom; click it for the track itself, with up next, history, and AI beside it. The collapse control closes it. Colors come from the active Omarchy theme.
 
 Pages open at once with what they showed last time, then update as fresh answers arrive, so a restart doesn't mean waiting on the network; artwork is kept on disk too, in `~/.cache/omadora/images`.
 

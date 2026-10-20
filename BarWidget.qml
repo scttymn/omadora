@@ -48,11 +48,6 @@ BarWidget {
     playerWindow.visible = true
   }
 
-  function shrink() {
-    playerWindow.visible = false
-    popupOpen = true
-  }
-
   // The bar's own click layer calls triggerPress on a registered WidgetButton.
   // A MouseArea underneath that layer never sees the left click.
   implicitWidth: button.implicitWidth
@@ -84,6 +79,15 @@ BarWidget {
       }
       if (b !== Qt.LeftButton)
         return
+      // Nothing to control yet: go straight to the full player to pick
+      // something (or sign in).
+      if (!engine.active) {
+        if (playerWindow.visible)
+          playerWindow.visible = false
+        else
+          root.expand()
+        return
+      }
       root.popupOpen = !root.popupOpen
     }
 
@@ -168,7 +172,7 @@ BarWidget {
       theme: theme
       fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
       shown: playerWindow.visible
-      onShrinkRequested: root.shrink()
+      onCloseRequested: playerWindow.visible = false
     }
   }
 }

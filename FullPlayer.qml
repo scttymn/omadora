@@ -10,7 +10,7 @@ Item {
   required property var player
   required property var theme
   property string fontFamily: Style.font.family
-  signal shrinkRequested()
+  signal closeRequested()
 
   property string queuePage: "next"
   property bool moreOpen: false
@@ -426,7 +426,7 @@ Item {
     color: root.theme.bg
     clip: true
 
-    // Header: mark, search, volume, shrink.
+    // Header: mark, search, volume, close.
     Item {
       id: header
       anchors.left: parent.left
@@ -608,7 +608,7 @@ Item {
           iconSize: Style.font.title
           fontFamily: root.fontFamily
           anchors.verticalCenter: parent.verticalCenter
-          onActivated: root.shrinkRequested()
+          onActivated: root.closeRequested()
         }
       }
 
