@@ -6,6 +6,8 @@
 use crate::pandora::Pandora;
 use anyhow::Result;
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 const ART_HOST: &str = "https://content-images.p-cdn.com/";
 
@@ -19,13 +21,32 @@ fn art(icon: &Value, size: u32) -> String {
 
 /// Playlist covers are compositing recipes ("thor layers"); Pandora's image
 /// service renders them the way its apps show them.
-fn thor(layers: &Value, size: u32) -> String {
+pub(crate) fn thor(layers: &Value, size: u32) -> String {
     match layers.as_str() {
         Some(l) if !l.is_empty() => {
-            format!("https://dyn-images.p-cdn.com/?l={}&w={size}&h={size}", urlencoding::encode(l))
+            format!("https://dyn-images.p-cdn.com/?l={}&w={size}&h={size}", urlencoding::encode(&steady_grids(l)))
         }
         _ => String::new(),
     }
+}
+
+/// Pandora lists some playlists' covers in a new order on every fetch, which
+/// made a new collage (a new download, the covers rearranged) each time the
+/// page was read. Sorted, the same covers make the same picture.
+fn steady_grids(layers: &str) -> String {
+    let mut out = String::with_capacity(layers.len());
+    let mut rest = layers;
+    while let Some(start) = rest.find("grid(") {
+        let open = start + "grid(".len();
+        let Some(len) = rest[open..].find(')') else { break };
+        let mut cells: Vec<&str> = rest[open..open + len].split(',').collect();
+        cells.sort_unstable();
+        out.push_str(&rest[..open]);
+        out.push_str(&cells.join(","));
+        rest = &rest[open + len..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn color(icon: &Value) -> String {
@@ -138,12 +159,24 @@ pub fn artist(a: &Value) -> Value {
     })
 }
 
+/// Pandora's own mixes get a collage of different covers, picked from many
+/// songs, on every fetch. Keep the first one shown for each playlist while
+/// the engine runs, so tiles don't change under the listener on every
+/// refresh; it's new again after a restart.
+pub(crate) fn steady_art(id: &Value, art: String) -> String {
+    static SHOWN: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+    match id.as_str() {
+        Some(id) if !id.is_empty() && !art.is_empty() => SHOWN.lock().unwrap().entry(id.to_string()).or_insert(art).clone(),
+        _ => art,
+    }
+}
+
 pub fn playlist(a: &Value) -> Value {
     json!({
         "id": a["pandoraId"],
         "name": text(&a["name"]),
         "trackCount": a["totalTracks"],
-        "art": thor(&a["thorLayers"], 500),
+        "art": steady_art(&a["pandoraId"], thor(&a["thorLayers"], 500)),
         "color": color(&a["icon"]),
         "owned": a["viewerInfo"]["editable"].as_bool().unwrap_or(false),
     })
@@ -350,7 +383,26 @@ pub fn tracks_for(pandora: &Pandora, source: &str) -> Result<(String, Vec<Value>
 
 #[cfg(test)]
 mod tests {
-    use super::clean_bio;
+    use super::{clean_bio, steady_art, steady_grids};
+
+    #[test]
+    fn collage_covers_in_a_steady_order() {
+        let a = "images/aa/:cover();grid(images/c3/@1/3,images/a1/@1/3,images/b2/@1/3);overlay($1)";
+        let b = "images/aa/:cover();grid(images/b2/@1/3,images/c3/@1/3,images/a1/@1/3);overlay($1)";
+        assert_eq!(steady_grids(a), "images/aa/:cover();grid(images/a1/@1/3,images/b2/@1/3,images/c3/@1/3);overlay($1)");
+        assert_eq!(steady_grids(a), steady_grids(b));
+        assert_eq!(steady_grids("images/aa/"), "images/aa/");
+        assert_eq!(steady_grids("_;grid(images/b/,images/a/"), "_;grid(images/b/,images/a/");
+    }
+
+    #[test]
+    fn a_playlist_keeps_its_first_collage() {
+        let id = serde_json::json!("PL:test:1");
+        assert_eq!(steady_art(&id, "first".into()), "first");
+        assert_eq!(steady_art(&id, "second".into()), "first");
+        assert_eq!(steady_art(&serde_json::json!("PL:test:2"), "other".into()), "other");
+        assert_eq!(steady_art(&serde_json::json!(null), "loose".into()), "loose");
+    }
 
     #[test]
     fn bio_keeps_artist_links_only() {
