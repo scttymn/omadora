@@ -8,14 +8,15 @@ Pandora in the Omarchy bar.
 > and it needs your own Pandora account. Pandora is a trademark of Pandora
 > Media, LLC; the Omadora lettering is a nod to its wordmark.
 
-![Omadora on an Omarchy desktop: the mini player under the bar, and the full player as a window](docs/desktop.webp)
+![Discover: Pitchfork reviews as cards, headlines down the side](docs/discover.webp)
 
 <p>
-  <img src="docs/music.webp" width="49%" alt="The full player: stations, the track playing, and history">
-  <img src="docs/discover.webp" width="49%" alt="Discover: Pitchfork reviews as cards, Rolling Stone headlines down the side">
+  <img src="docs/browse.webp" width="32%" alt="Browse: artists picked for you, new music, and genres">
+  <img src="docs/music.webp" width="32%" alt="Music: your stations, playlists, and artists">
+  <img src="docs/podcasts.webp" width="32%" alt="Podcasts: your shows, trending shows, and new episodes">
 </p>
 
-<p align="center"><img src="docs/widget.png" width="410" alt="The mini player, opened from the bar"></p>
+<p align="center"><img src="docs/widget.png" width="385" alt="The mini player, opened from the bar"></p>
 
 The bar shows the Omadora mark. Left-click it for the mini player (art, progress, transport), or, with nothing playing, the full player. The expand control opens the full player as a regular window that Hyprland tiles like any other app. Its header has four places: Discover (where it opens), Browse, Music (your stations, playlists, and artists), and Podcasts. Each keeps its own pages, so going back to one finds you where you left it; choosing the one you're in takes you back to its start. What's playing is in a strip along the bottom; click it for the track itself, with up next, history, and AI beside it. The collapse control closes it. Colors come from the active Omarchy theme.
 
