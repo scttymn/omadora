@@ -20,7 +20,7 @@ Item {
   property string startError: ""
 
   property var state: ({})
-  property bool online: false
+  readonly property bool online: link.item !== null && link.item.connected
   property int clock: 0
   property var pending: ({})
   property int nextReq: 1
@@ -84,8 +84,8 @@ Item {
       ensureRunning()
       return
     }
-    socket.write(JSON.stringify(msg) + "\n")
-    socket.flush()
+    link.item.write(JSON.stringify(msg) + "\n")
+    link.item.flush()
   }
 
   function play(sourceId, trackId) {
@@ -200,28 +200,51 @@ Item {
     onTriggered: root.ensureRunning()
   }
 
-  Socket {
-    id: socket
-    path: root.socketPath
-    connected: true
-    parser: SplitParser {
-      onRead: function (data) { root.handle(data) }
-    }
-    onConnectionStateChanged: {
-      root.online = connected
-      if (connected) {
-        root.launches = 0
-        return
+  // A fresh Socket for every attempt. Quickshell 0.3.1 keeps a Socket's
+  // failed connection around, after which `connected = true` does nothing,
+  // so one failed attempt (the shell starting before the engine) would
+  // leave the widget offline for good.
+  function reconnect() {
+    link.active = false
+    link.active = true
+  }
+
+  Loader {
+    id: link
+    sourceComponent: socketComponent
+  }
+
+  Component {
+    id: socketComponent
+
+    Socket {
+      path: root.socketPath
+      connected: true
+      parser: SplitParser {
+        onRead: function (data) { root.handle(data) }
       }
-      // Fail any waiting requests; the engine is gone.
-      var waiting = root.pending
-      root.pending = ({})
-      for (var k in waiting)
-        waiting[k](false, "The player engine stopped.")
-      root.state = ({})
-      retryTimer.restart()
+      onConnectionStateChanged: root.connectionChanged(connected)
+      onError: retryTimer.restart()
     }
-    onError: retryTimer.restart()
+  }
+
+  // Not in connectionChanged: a Socket that connects as it is created
+  // signals nothing.
+  onOnlineChanged: {
+    if (online)
+      launches = 0
+  }
+
+  function connectionChanged(connected) {
+    if (connected)
+      return
+    // Fail any waiting requests; the engine is gone.
+    var waiting = pending
+    pending = ({})
+    for (var k in waiting)
+      waiting[k](false, "The player engine stopped.")
+    state = ({})
+    retryTimer.restart()
   }
 
   // Reconnect quietly; launch the engine if a reconnect finds nothing.
@@ -231,8 +254,7 @@ Item {
     onTriggered: {
       if (root.online)
         return
-      socket.connected = false
-      socket.connected = true
+      root.reconnect()
       if (!root.online)
         root.ensureRunning()
     }
@@ -242,8 +264,9 @@ Item {
     id: launchTimer
     interval: 1500
     onTriggered: {
-      socket.connected = false
-      socket.connected = true
+      if (root.online)
+        return
+      root.reconnect()
       if (!root.online)
         retryTimer.restart()
     }
